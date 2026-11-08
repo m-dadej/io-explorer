@@ -31,6 +31,7 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 
   Browsers keep the files in their cache, so later visits are fast.
 - **Updating:** after a new FIGARO edition, run `prepare_data.R`, then `root_dir <- "."; source("R/03_export_web.R")`, and commit `docs/`.
+- **Updating the text only:** after editing `app/notes.md` or `app/guide.md`, run `root_dir <- "."; source("R/04_export_web_text.R")`. It takes a second and needs no data.
 - **Previewing on your PC:** run `httpuv::runStaticServer("docs", port = 8000)` in R and open http://localhost:8000. Opening `index.html` directly from disk does not work, because browsers don't let a page load data files from disk.
 - **Libraries:** charts use Observable Plot, the pickers Tom Select, and Excel downloads SheetJS. All are copied into `docs/lib/`, so the site depends on no outside service.
 
@@ -44,10 +45,12 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 | `R/01_import.R` | Reads each FIGARO CSV into matrices: intermediate use Z, final demand Y, value added. Checks that each table balances |
 | `R/02_leontief.R` | Leontief inverse per year, GVA absorbed by each buyer country and final demand category. Checks that every country-industry's GVA is fully allocated. Writes long tables to `data/tables/` |
 | `R/engine.R` | The functions that answer the questions (see the top of the file). Use them in your own scripts |
-| `app/app.R` | The Shiny app; `app/charts.R` holds the chart style, `app/notes.md` the notes page |
+| `app/app.R` | The Shiny app; `app/charts.R` holds the chart style, `app/notes.md` the Guide & notes page |
+| `app/guide.md` | The guide box at the top of each tab (the question it answers, how to read it), for the app and the website; `app/guide.R` reads it |
 | `analysis/examples.R` | Worked questions and checks that the model behaves (run it after a new edition) |
-| `R/03_export_web.R` | Exports one year of the model for the website (`docs/data/`) and the notes page |
-| `docs/` | The website: `index.html`, `js/engine.js` (the model), `js/main.js` (the tabs), `js/charts.js`, `js/ui.js`, `css/`, `lib/`, `data/` |
+| `R/03_export_web.R` | Exports one year of the model for the website (`docs/data/`), then runs `04_export_web_text.R` |
+| `R/04_export_web_text.R` | Writes the website's text from the app's markdown: `docs/notes.html` and `docs/guide.json` |
+| `docs/` | The website: `index.html`, `js/engine.js` (the model), `js/main.js` (the tabs), `js/readings.js` (the "In plain words" texts), `js/charts.js`, `js/ui.js`, `css/`, `lib/`, `data/` |
 
 ## The app
 
@@ -60,9 +63,13 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 | Shock simulator | Any final demand or production shock, in % or EUR. Results by country, country-industry and industry group, split into direct, first-round suppliers, further supply-chain rounds and household spending; Excel download |
 | Domestic shock | A shock to a country's own final demand or production. You see the effect on its own industries, the leakage abroad by country, and home GVA per EUR of shock. Three structural views need no shock: (1) which kind of home demand each industry depends on, (2) where EUR 1 of home demand ends up, by category and over time, and (3) home multipliers by industry |
 | Government | GVA depending on government consumption at home and abroad, who benefits from a given government, a one-click scenario |
-| Notes | Definitions, formulas, caveats |
+| Guide & notes | Start here: key terms in plain words, how to read any result, which tab answers which question. Then definitions, formulas, caveats |
 
 Every chart has a Table tab with the numbers and an Excel download.
+
+Help for readers who are not input-output specialists:
+- **A guide box at the top of each tab** gives the question the tab answers, and (under "How to read it") worked examples and things to try. The text is in `app/guide.md`.
+- **"In plain words" boxes** put the current results into a sentence or two, e.g. "Of every EUR 100 of value added created by Poland in 2024, EUR 66.2 is finally used at home…". They change with the settings. In the app they are the `read` functions in `app/app.R`; on the website, `docs/js/readings.js` has the same texts. Change both together.
 
 ## Good to know
 

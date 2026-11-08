@@ -6,11 +6,14 @@
 // =============================================================================
 
 import { IOModel, parseCore, parseL, parseA, sum } from './engine.js';
-import { el, fmt, buildControls, valueBoxes, card, message, downloadXlsx, debounce } from './ui.js';
+import { el, fmt, buildControls, valueBoxes, card, message, downloadXlsx, debounce, guideBox, reading } from './ui.js';
 import { barsH, stackedH, pairedH, heatmap, categoryColours, effectColours, contentColours, multiplierColours,
          hhGreen, hhLabel, blue } from './charts.js';
+import { makeReadings } from './readings.js';
 
 let model, meta, D, year, base;
+let guide = {};   // the guide box of each tab (guide.json)
+let R;            // readings of the results in words (readings.js)
 const mainEl = document.getElementById('main');
 
 // ---- Errors are shown on the page (and not only in the console) ---------------------------------------
@@ -110,6 +113,10 @@ function partsText(where, total, direct, first, further, induced, production, sh
     showInduced ? `household spending ${fmt.m(induced, 1)}` : null].filter(Boolean);
   return `Change in GVA ${where}: ${fmt.m(total, 1)} = ${parts.join(', ')}.`;
 }
+// Sets a reading in words on a card (or a reading box); a failing reading never breaks the chart
+function readInto(target, fn) {
+  try { target.setReading(fn()); } catch (e) { target.setReading(null); console.error(e); }
+}
 const COLS = {
   country: { key: 'country_name', label: 'Country', type: 'text' },
   va: { key: 'va', label: 'GVA, EUR m', type: 'eur' }
@@ -118,7 +125,7 @@ const nameCol = level => ({ country: 'Country', country_sector: 'Country-industr
 
 function page(id, withSidebar = true) {
   const side = withSidebar ? el('aside', { class: 'sidebar' }) : null;
-  const content = el('div', { class: 'content' });
+  const content = el('div', { class: 'content' }, guide[id] ? guideBox(guide[id]) : null);
   const sec = el('section', { class: withSidebar ? 'page' : 'page single', id: `page-${id}`, hidden: true }, side, content);
   mainEl.append(sec);
   return { sec, side, content };
@@ -180,6 +187,8 @@ function buildDest() {
         columns: [{ key: 'buyer_name', label: 'Buyer', type: 'text' }, ...cats.map(k => ({ key: k, label: model.catLabels[k], type: 'pct' })),
                   { key: 'total', label: 'Total share', type: 'pct' }, { key: 'va', label: 'GVA absorbed, EUR m', type: 'eur' }]
       });
+      readInto(cTop, () => R.destTop({ c: S.c, s: S.s, catLabels: cats.map(k => model.catLabels[k]), allCats: cats.length === catChoices.length,
+                                       home: share(r => r.domestic), abroad: share(r => !r.domestic), foreign }));
 
       const ex = model.exportsVsVa(S.c, S.s), exTop = ex.slice(0, top);
       cExp.set({
@@ -193,6 +202,7 @@ function buildDest() {
                   { key: 'exports_share', label: 'Share of gross exports', type: 'pct' }, { key: 'va_absorbed', label: 'GVA absorbed, EUR m', type: 'eur' },
                   { key: 'va_share', label: 'Share of GVA absorbed abroad', type: 'pct' }]
       });
+      readInto(cExp, () => R.destExports(ex));
 
       const b = model.vaByBuyer(S.c, S.s, heatRows).filter(r => cats.includes(r.code));
       const origins = [...new Map(b.map(r => [r.origin, r.origin_va]))].sort((x, y) => y[1] - x[1]).slice(0, 15).map(x => x[0]);
@@ -214,6 +224,7 @@ function buildDest() {
         data: wide, file: 'va_by_buyer_heatmap',
         columns: [{ key: 'row', label: 'Origin', type: 'text' }, ...cols.map(c => ({ key: c, label: c, type: 'pct' }))]
       });
+      readInto(cHeat, () => R.destHeat(long));
     } catch (e) { [cTop, cExp, cHeat].forEach(c => c.message(e.message, true)); }
   }, 120);
   return { update };
@@ -266,6 +277,7 @@ function buildExpo() {
         columns: [{ key: 'name', label: nameCol(S.level), type: 'text' }, { key: 'share', label: 'Share of GVA dependent', type: 'pct' },
                   { key: 'dep', label: 'GVA dependent, EUR m', type: 'eur1' }, COLS.va]
       });
+      readInto(cRes, () => R.expo({ type: S.type, srcC: S.src_c, srcS: S.src_s, show: S.show, dep, va: t.va, res }));
     } catch (e) { cRes.message(e.message, true); }
   }, 150);
   return { update };
@@ -308,6 +320,7 @@ function buildSrc() {
         columns: [{ key: 'source_name', label: 'Source', type: 'text' }, { key: 'share', label: 'Share of origin’s GVA', type: 'pct' },
                   { key: 'va_dependent', label: 'GVA dependent, EUR m', type: 'eur1' }]
       });
+      readInto(cRes, () => R.src({ c: S.c, s: S.s, type: S.type, level: S.level, res }));
     } catch (e) { cRes.message(e.message, true); }
   }, 150);
   return { update };
@@ -350,6 +363,7 @@ function buildPairs() {
                   { key: 'share', label: 'Share of origin’s GVA', type: 'pct' }, { key: 'va_dependent', label: 'GVA dependent, EUR m', type: 'eur1' },
                   { key: 'origin_va', label: 'Origin GVA, EUR m', type: 'eur' }]
       });
+      readInto(cRes, () => R.pairs({ type: S.type, res }));
     } catch (e) { cRes.message(e.message, true); }
   }, 150);
   return { update };
@@ -393,6 +407,7 @@ function buildGov() {
         columns: [COLS.country, { key: 'share_domestic', label: 'Home government', type: 'pct' }, { key: 'share_foreign', label: 'Foreign governments', type: 'pct' },
                   { key: 'va_domestic', label: 'Home, EUR m', type: 'eur' }, { key: 'va_foreign', label: 'Foreign, EUR m', type: 'eur' }, COLS.va]
       });
+      readInto(cShare, () => R.govShare(sh));
     } catch (e) { cShare.message(e.message, true); }
     try {
       const govName = model.countryNames[S.gov];
@@ -417,6 +432,7 @@ function buildGov() {
         columns: [{ key: 'name', label: 'Who', type: 'text' }, { key: 'share_va', label: 'Share of own GVA', type: 'pct' },
                   { key: 'dva', label: 'GVA from this government, EUR m', type: 'eur1' }, COLS.va]
       });
+      readInto(cBenef, () => R.govBenef({ gov: S.gov, total: model.summariseImpact(imp, 'total', show)[0], top: s[0], byShare: share }));
     } catch (e) { cBenef.message(e.message, true); }
   }, 150);
   return { update };
@@ -446,7 +462,7 @@ function buildSim() {
     { key: 'show', type: 'multi', label: 'Show results for', value: [D.focus], options: countryOpts },
     { key: 'min_va', type: 'number', label: 'Leave out country-industries with GVA below (EUR m)', value: D.min_va, min: 0, step: 50 },
     { key: 'top', type: 'number', label: 'Rows in the chart', value: D.top_n, min: 5, max: 60, step: 5 },
-    { type: 'hint', html: 'An amount in EUR is spread like current demand (or output). Effects are linear: twice the shock gives twice the effect. Household spending of extra wages: households in every country spend part of the extra wages, round after round (see Notes).' }
+    { type: 'hint', html: 'An amount in EUR is spread like current demand (or output). Effects are linear: twice the shock gives twice the effect. Household spending of extra wages: households in every country spend part of the extra wages, round after round (see Guide &amp; notes).' }
   ], key => { if (['show', 'min_va', 'top'].includes(key)) render(); });
   const S = ctl.state;
   const desc = el('div', { class: 'desc' });
@@ -455,6 +471,7 @@ function buildSim() {
     { key: 'size', title: 'Size of the shock' },
     { key: 'world', title: 'Change in world GVA' },
     { key: 'shown', title: 'Change in GVA of the countries shown' }]);
+  const headline = reading(content);
   let scope = 'shown', exclShocked = true;
   const excl = el('label', { class: 'check', hidden: true }, el('input', { type: 'checkbox', checked: true, onchange: e => { exclShocked = e.target.checked; render(); } }),
     ' Leave out the countries where the shock happens');
@@ -492,7 +509,10 @@ function buildSim() {
         ? model.fdShock({ buyers: spec.buyers, categories: spec.cats, productCountries: spec.pc, productSectors: spec.ps, ...common })
         : model.outputShock({ sourceCountries: spec.src_c, sourceSectors: spec.src_s, ...common });
       render();
-    } catch (e) { imp = null; dlAll.disabled = true; desc.textContent = ''; cards.forEach(c => c.message(e.message, true)); }
+    } catch (e) {
+      imp = null; dlAll.disabled = true; desc.textContent = ''; headline.setReading(null);
+      cards.forEach(c => c.message(e.message, true));
+    }
   }
   function render() {
     if (!imp) return;
@@ -504,6 +524,7 @@ function buildSim() {
       boxes.set('size', fmt.amount(imp.size));
       boxes.set('world', `${fmt.amount(world.dva)} (${fmt.pct(world.share_va, 3)})`, hhNote(world));
       boxes.set('shown', `${fmt.amount(shown.dva)} (${fmt.pct(shown.share_va, 3)})`, hhNote(shown));
+      readInto(headline, () => R.simHeadline({ show: S.show, shown, world }));
       const showSet = new Set(model.expandCountries(S.show));
 
       let countries = model.summariseImpact(imp, 'country').sort((a, b) => a.share_va - b.share_va);
@@ -527,8 +548,9 @@ function buildSim() {
                   { key: 'dva_further', label: 'Further supply-chain rounds, EUR m', type: 'eur1' },
                   ...(imp.induced ? [{ key: 'dva_induced', label: 'Household spending, EUR m', type: 'eur1' }] : []), COLS.va]
       });
+      readInto(cCountry, () => R.simCountries({ rows: shownC, scope, exclShocked }));
 
-      const cs = model.summariseImpact(imp, 'country_sector', S.show, minVaOf(S.min_va)).sort((a, b) => a.share_va - b.share_va);
+      const cs =model.summariseImpact(imp, 'country_sector', S.show, minVaOf(S.min_va)).sort((a, b) => a.share_va - b.share_va);
       const csChart = cs.filter(r => !(prod && r.in_source)).sort((a, b) => Math.abs(b.share_va) - Math.abs(a.share_va)).slice(0, topOf(S.top, D.top_n))
         .map(r => ({ ...r, direct: r.dva_direct, first: r.dva_first, further: r.dva_further, induced: r.dva_induced }));
       cCs.setParts(partsText('in the countries shown', shown.dva, shown.dva_direct, shown.dva_first, shown.dva_further, shown.dva_induced, prod, imp.induced));
@@ -543,6 +565,7 @@ function buildSim() {
                   ...(imp.induced ? [{ key: 'dva_induced', label: 'Household spending, EUR m', type: 'eur1' }] : []),
                   { key: 'share_country_va', label: 'Change, % of country’s GVA', type: 'pct' }, COLS.va]
       });
+      readInto(cCs, () => R.simCs({ top: csChart[0], shown, induced: imp.induced }));
 
       const heat = model.summariseImpact(imp, 'country_sector_group', S.show);
       const codes = model.expandCountries(S.show);
@@ -553,8 +576,9 @@ function buildSim() {
         data: wide, file: 'shock_by_industry_group',
         columns: [{ key: 'sector_group', label: 'Industry group', type: 'text' }, ...codes.map(c => ({ key: c, label: c, type: 'pct' }))]
       });
+      readInto(cHeat, () => R.simHeat(long));
       dlAll.disabled = false;
-    } catch (e) { cards.forEach(c => c.message(e.message, true)); }
+    } catch (e) { headline.setReading(null); cards.forEach(c => c.message(e.message, true)); }
   }
   async function downloadAll() {
     const cs = model.summariseImpact(imp, 'country_sector');
@@ -618,6 +642,7 @@ function buildDom() {
   const boxes = valueBoxes(content, [
     { key: 'size', title: 'Size of the shock' }, { key: 'home', title: 'Change in home GVA' },
     { key: 'mult', title: 'Home GVA per EUR 1 of shock' }, { key: 'abroad', title: 'Change in GVA abroad' }]);
+  const headline = reading(content);
   let metric = 'eur', multOrder = 'high';
   const cInd = card(content, { title: 'Change in GVA of home industries',
     top: inlineRadio([['eur', 'EUR million'], ['share', '% of own GVA']], 'eur', v => { metric = v; update(); }),
@@ -642,7 +667,7 @@ function buildDom() {
       if (S.induced) rate = checkSpendRate(S.rate);
       if (!model.L || !model.A) [...shockCards, cContent, cMult].forEach(x => x.message('Loading the model data…'));
       await ensure('L', 'A');
-    } catch (e) { [...shockCards, ...structCards].forEach(x => x.message(e.message, true)); return; }
+    } catch (e) { headline.setReading(null); [...shockCards, ...structCards].forEach(x => x.message(e.message, true)); return; }
 
     // -- The shock
     try {
@@ -684,6 +709,7 @@ function buildDom() {
                   ...(S.induced ? [{ key: 'induced', label: 'Household spending, EUR m', type: 'eur1' }] : []),
                   { key: 'share', label: 'Change, % of own GVA', type: 'pct' }, COLS.va]
       });
+      readInto(cInd, () => R.domInd({ rows: s, pct: metric === 'share', prod, loss: h.dva_home < 0 }));
 
       const ab = model.summariseImpact(imp, 'country').filter(r => r.country !== c);
       const totalAb = sum(ab.map(r => r.dva));
@@ -699,7 +725,8 @@ function buildDom() {
         columns: [COLS.country, { key: 'dva', label: 'Change in GVA, EUR m', type: 'eur1' }, { key: 'share_abroad', label: 'Share of the change abroad', type: 'pct' },
                   { key: 'share_va', label: 'Change, % of the country’s GVA', type: 'pct' }, COLS.va]
       });
-    } catch (e) { desc.textContent = ''; shockCards.forEach(x => x.message(e.message, true)); }
+      readInto(headline, () => R.domHeadline({ c, fd, induced: S.induced, size: S.size, prodS: S.prod_s, h, abroad: ab }));
+    } catch (e) { desc.textContent = ''; headline.setReading(null); shockCards.forEach(x => x.message(e.message, true)); }
 
     // -- The structure of the home economy
     try {
@@ -717,6 +744,7 @@ function buildDom() {
         data: wide, file: 'home_industries_by_demand',
         columns: [{ key: 'origin_name', label: nameCol(S.level), type: 'text' }, COLS.va, ...cols.map(k => ({ key: k, label: k, type: 'pct' }))]
       });
+      readInto(cExpo, () => R.domExpo({ e, names: sizes.map(x => x[0]) }));
 
       const content_ = model.domesticContent(c, S.induced, rate);
       const parts = [['home_per_eur', 'Home GVA'], ['abroad_per_eur', 'GVA abroad'], ['other_per_eur', 'Taxes on products & other'],
@@ -732,6 +760,7 @@ function buildDom() {
                   { key: 'other_per_eur', label: 'Taxes on products & other, % of each EUR', type: 'pct' },
                   ...(S.induced ? [{ key: 'home_hh_per_eur', label: 'Extra home GVA from household spending, % of each EUR', type: 'pct' }] : [])]
       });
+      readInto(cContent, () => R.domContent({ c, rows: content_, induced: S.induced }));
 
       const m = model.domesticMultipliers(c, S.induced, rate).filter(r => r.va >= minVA && Number.isFinite(r.va_home))
         .map(r => ({ ...r, total_home: r.va_home + (S.induced ? r.va_home_hh : 0) }));
@@ -752,6 +781,7 @@ function buildDom() {
                   { key: 'output_multiplier', label: 'Home output per EUR (supply chain only)', type: 'dec' },
                   { key: 'final_demand', label: 'Final demand for its products, EUR m', type: 'eur' }, COLS.va]
       });
+      readInto(cMult, () => R.domMult({ c, rows: m }));
     } catch (e) { structCards.forEach(x => x.message(e.message, true)); }
   }, 150);
   return { update };
@@ -782,7 +812,7 @@ const TABS = [
   { id: 'sim', title: 'Shock simulator', build: buildSim },
   { id: 'dom', title: 'Domestic shock', build: buildDom },
   { id: 'gov', title: 'Government', build: buildGov },
-  { id: 'notes', title: 'Notes', build: buildNotes }
+  { id: 'notes', title: 'Guide & notes', build: buildNotes }
 ];
 const built = {};
 function showTab(id) {
@@ -805,6 +835,9 @@ async function start() {
   D = meta.defaults;
   const core = parseCore(meta, await fetchBuffer(`${base}/${meta.files.core}`, 'the core tables', meta.bytes.core));
   model = new IOModel(meta, core);
+  R = makeReadings(model, year);
+  // The guide boxes are optional: without the file the tabs work as before
+  guide = await fetch('guide.json').then(r => (r.ok ? r.json() : {})).catch(() => ({}));
   pickerOptions();
   document.getElementById('data-note').textContent = `Eurostat FIGARO (${meta.edition}), ${year}, EUR million, current prices`;
   const nav = document.getElementById('tabs');

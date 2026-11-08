@@ -12,6 +12,8 @@ library(bslib)
 library(reactable)
 library(ggplot2)
 source("charts.R", local = TRUE)
+source("guide.R", local = TRUE)
+guide <- read_guide(file.path(root_dir, "app/guide.md"))
 
 yrs    <- available_years()
 latest <- if (default_year %in% yrs) default_year else max(yrs)
@@ -103,14 +105,65 @@ parts_text <- function(where, total, direct, first, further, induced, production
 }
 hint <- function(...) div(class = "text-muted small", ...)
 
+# ---- Help for readers: the guide box of each tab, and readings of the results in words --------------
+# The question a tab answers, a short text and (collapsed) how to read it, from guide.md
+guide_box <- function(id) {
+  g <- guide[[id]]
+  if (is.null(g)) return(NULL)
+  div(class = "guide",
+      div(class = "guide-q", g$question),
+      HTML(g$intro),
+      if (nzchar(g$details)) tags$details(tags$summary("How to read it, with examples"), HTML(g$details)))
+}
+reading_box <- function(txt) div(class = "reading", span(class = "reading-label", "In plain words"), txt)
+# A reading of the results in words. Shows nothing while the results are not ready (the chart says
+# why), and nothing if the reading itself fails: it must never break a chart.
+render_reading <- function(read) renderUI({
+  txt <- tryCatch(read(), error = function(e) NULL)
+  if (length(txt) == 1 && !is.na(txt) && nzchar(txt)) reading_box(txt)
+})
+
+fmt_amount <- function(x) ifelse(abs(x) >= 1000, fmt_bn(x, 2), eur_m1(x))   # EUR m, in bn from EUR 1 bn
+eur_per    <- function(x) sprintf("EUR %.2f", x)                              # per EUR 1
+per100     <- function(x) paste0("EUR ", formatC(100 * x, format = "f", digits = 1))   # share as EUR per EUR 100
+and_list   <- function(x) if (length(x) < 2) paste(x, collapse = "") else
+  paste(paste(head(x, -1), collapse = ", "), "and", tail(x, 1))
+short_category <- function(x) sub(" \\(.*\\)$", "", x)                        # "Investment (GFCF)" -> "Investment"
+pp_text <- function(x) if (abs(x) < 0.0005) "less than 0.001" else formatC(abs(x), format = "f", digits = 3)
+# "Motor vehicles in Germany", or "Germany" for all industries
+describe_in <- function(sel_countries, sel_sectors = "All sectors") {
+  if (identical(sel_sectors, "All sectors")) describe(sel_countries)
+  else paste(describe_sectors(sel_sectors), "in", describe(sel_countries))
+}
+production_of <- function(c, s) if (identical(s, "All sectors")) paste("all production in", describe(c)) else
+  paste("production of", describe_in(c, s))
+products_of <- function(c, s) if (identical(s, "All sectors")) paste("products made in", describe(c)) else
+  paste("products of", describe_in(c, s))
+
+app_css <- "
+.guide { background: #fff; border: 1px solid #e6e4dc; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+.guide-q { font-weight: 650; font-size: 1.05rem; margin-bottom: 4px; }
+.guide p { margin: 0 0 6px; color: #52514e; }
+.guide summary { cursor: pointer; color: #184f95; font-weight: 600; font-size: 0.875rem; }
+.guide details[open] summary { margin-bottom: 6px; }
+.guide ul { margin: 0 0 4px; padding-left: 20px; color: #52514e; }
+.guide li { margin-bottom: 4px; }
+.reading { background: #eef5fd; border-radius: 6px; padding: 8px 12px; font-size: 0.9rem; line-height: 1.5; }
+.reading-label { font-weight: 700; color: #184f95; margin-right: 6px; }
+.card-body:has(> .reading-slot) { padding-bottom: 0; }
+.card-body:has(> .reading-slot > .shiny-html-output:empty) { padding-top: 0; }  /* not display: none, which
+   would stop Shiny from ever filling the reading */
+"
+
 vbox <- function(title, output_id, note = NULL) {
   value_box(title = title, value = textOutput(output_id), if (!is.null(note)) p(note),
             theme = value_box_theme(bg = "#f6f5f1", fg = ink), fill = FALSE)
 }
 
 # A card with a chart, its table (with download) and optionally the same over time.
-# `...` goes above the chart (e.g. a switch).
-chart_card <- function(id, title, ..., time_panel = FALSE, note = NULL) {
+# `...` goes above the chart (e.g. a switch). read = TRUE adds a reading in words above the tabs
+# (output <id>_read, filled by wire_card's `read`).
+chart_card <- function(id, title, ..., time_panel = FALSE, note = NULL, read = FALSE) {
   panels <- list(
     nav_panel("Chart", ..., plotOutput(paste0(id, "_plot"), height = "auto"),
               if (!is.null(note)) hint(note)),
@@ -122,7 +175,9 @@ chart_card <- function(id, title, ..., time_panel = FALSE, note = NULL) {
     panels <- c(panels, list(nav_panel("Over time", plotOutput(paste0(id, "_time"), height = "auto"),
                                        hint("Computed for all years when you open this tab."))))
   }
-  do.call(navset_card_tab, c(list(id = paste0(id, "_tabs"), title = title, full_screen = TRUE), panels))
+  header <- if (read) div(class = "reading-slot", uiOutput(paste0(id, "_read")))
+  do.call(navset_card_tab, c(list(id = paste0(id, "_tabs"), title = title, full_screen = TRUE, header = header),
+                             panels))
 }
 
 # ---- Tables -----------------------------------------------------------------------------------
@@ -151,8 +206,10 @@ export_view <- function(df, cols) {
 
 # Chart + table + download for one card
 # `cols` can be a list or a function returning one (when the columns depend on inputs).
-wire_card <- function(output, id, data, cols, plot, height, file_stub) {
+# `read`: a function returning the reading in words (for cards made with read = TRUE).
+wire_card <- function(output, id, data, cols, plot, height, file_stub, read = NULL) {
   get_cols <- function() if (is.function(cols)) cols() else cols
+  if (!is.null(read)) output[[paste0(id, "_read")]] <- render_reading(read)
   output[[paste0(id, "_plot")]]  <- renderPlot(plot(), height = height, res = 96)
   output[[paste0(id, "_table")]] <- renderReactable(table_view(data(), get_cols()))
   output[[paste0(id, "_dl")]]    <- downloadHandler(
@@ -199,6 +256,7 @@ ui <- page_navbar(
   title = "IO Explorer",
   theme = bs_theme(version = 5, primary = blue, "font-size-base" = "0.95rem"),
   fillable = FALSE,
+  header = tags$head(tags$style(HTML(app_css))),
 
   # ---- 1. Where value added ends up -------------------------------------------------------------
   nav_panel("Where VA ends up", value = "dest",
@@ -213,6 +271,7 @@ ui <- page_navbar(
              "directly or through other countries' exports (e.g. Polish parts in German cars bought in the US ",
              "count for the US). Shares are of the origin's GVA.")
       ),
+      guide_box("dest"),
       layout_column_wrap(width = 1 / 4, fill = FALSE,
         vbox("Gross value added", "d_gva"),
         vbox("Ends up at home", "d_home", "share of GVA, all categories"),
@@ -220,13 +279,13 @@ ui <- page_navbar(
         vbox("Depends on government consumption", "d_gov", "at home and abroad")
       ),
       chart_card("d_top", "Foreign buyers: share of the origin's GVA absorbed by their final demand",
-                 time_panel = TRUE),
-      chart_card("d_exp", "Direct exports vs value added absorbed (shares of all foreign buyers)",
+                 time_panel = TRUE, read = TRUE),
+      chart_card("d_exp", "Direct exports vs value added absorbed (shares of all foreign buyers)", read = TRUE,
                  note = paste("Gross exports count where goods and services are shipped to. Value added",
                               "absorbed counts where the origin's own value added is finally used. A buyer",
                               "with a longer blue bar takes more of the origin's value added than direct",
                               "exports suggest (it is reached through other countries).")),
-      chart_card("d_heat", "Share of GVA absorbed, by part of the origin (%)",
+      chart_card("d_heat", "Share of GVA absorbed, by part of the origin (%)", read = TRUE,
                  radioButtons("d_heat_rows", NULL, c("By industry" = "sector", "By country" = "country"),
                               inline = TRUE),
                  note = paste("Home = final demand in the row's own country (not coloured, so that differences",
@@ -257,12 +316,13 @@ ui <- page_navbar(
              strong("Final demand: "), "share of GVA that depends on final demand, anywhere, for the ",
              "source's products.")
       ),
+      guide_box("expo"),
       layout_column_wrap(width = 1 / 3, fill = FALSE,
         vbox(textOutput("x_size_title", inline = TRUE), "x_size"),
         vbox("GVA depending on it in the countries shown", "x_dep"),
         vbox("Share of their GVA", "x_share")
       ),
-      chart_card("x_res", textOutput("x_title", inline = TRUE), time_panel = TRUE)
+      chart_card("x_res", textOutput("x_title", inline = TRUE), time_panel = TRUE, read = TRUE)
     )
   ),
 
@@ -286,7 +346,8 @@ ui <- page_navbar(
         hint("Production: the shares are not additive (supply chains overlap). ",
              "Final demand: the shares add up to 100% over all sources, home included.")
       ),
-      chart_card("o_res", textOutput("o_title", inline = TRUE))
+      guide_box("src"),
+      chart_card("o_res", textOutput("o_title", inline = TRUE), read = TRUE)
     )
   ),
 
@@ -308,7 +369,8 @@ ui <- page_navbar(
         hint("Each pair: one origin country-industry and one source country-industry. ",
              "Share = part of the origin's GVA that depends on the source.")
       ),
-      chart_card("p_res", "Most exposed pairs of country-industries")
+      guide_box("pairs"),
+      chart_card("p_res", "Most exposed pairs of country-industries", read = TRUE)
     )
   ),
 
@@ -339,28 +401,30 @@ ui <- page_navbar(
         pick_top("s_top"),
         hint("An amount in EUR is spread like current demand (or output). Effects are linear: ",
              "twice the shock gives twice the effect. Household spending of extra wages: households in ",
-             "every country spend part of the extra wages, round after round (see Notes).")
+             "every country spend part of the extra wages, round after round (see Guide & notes).")
       ),
+      guide_box("sim"),
       div(class = "mb-2", strong(textOutput("s_desc"))),
       layout_column_wrap(width = 1 / 3, fill = FALSE,
         vbox("Size of the shock", "s_size_out"),
         vbox("Change in world GVA", "s_world", textOutput("s_world_note", inline = TRUE)),
         vbox("Change in GVA of the countries shown", "s_shown", textOutput("s_shown_note", inline = TRUE))
       ),
-      chart_card("s_country", "Change in GVA by country (% of the country's GVA)",
+      div(class = "mb-3", uiOutput("s_read")),
+      chart_card("s_country", "Change in GVA by country (% of the country's GVA)", read = TRUE,
                  div(class = "d-flex flex-wrap column-gap-4",
                      radioButtons("s_country_scope", NULL,
                                   c("Countries shown" = "shown", "20 most affected worldwide" = "world"),
                                   inline = TRUE),
                      conditionalPanel("input.s_country_scope == 'world'",
                        checkboxInput("s_excl_shocked", "Leave out the countries where the shock happens", TRUE)))),
-      chart_card("s_cs", "Most affected country-industries (% of their own GVA)",
+      chart_card("s_cs", "Most affected country-industries (% of their own GVA)", read = TRUE,
                  div(class = "small text-muted mb-1", textOutput("s_cs_parts")),
                  note = paste("Direct = the producers of what is bought. First-round suppliers = what they buy as",
                               "inputs. Further rounds = the suppliers' suppliers, and so on. Household spending =",
                               "spending of the extra wages (when switched on). In a production shock, the shocked",
                               "producers themselves are left out of the chart.")),
-      chart_card("s_heat", "Change in GVA by broad industry group (% of the group's GVA)"),
+      chart_card("s_heat", "Change in GVA by broad industry group (% of the group's GVA)", read = TRUE),
       downloadButton("s_dl_all", "Download all results (Excel)", class = "btn-outline-secondary mb-4")
     )
   ),
@@ -399,6 +463,7 @@ ui <- page_navbar(
              "(at home and on imports). Without it, effects are a lower bound; with it, the upper end of a ",
              "pure demand effect (no prices, interest rates or crowding out).")
       ),
+      guide_box("dom"),
       h5(class = "mt-1", "The shock"),
       div(class = "mb-2", textOutput("h_desc")),
       layout_column_wrap(width = 1 / 4, fill = FALSE,
@@ -407,7 +472,8 @@ ui <- page_navbar(
         vbox("Home GVA per EUR 1 of shock", "h_mult_out", textOutput("h_mult_note", inline = TRUE)),
         vbox("Change in GVA abroad", "h_abroad_out", textOutput("h_abroad_note", inline = TRUE))
       ),
-      chart_card("h_ind", "Change in GVA of home industries",
+      div(class = "mb-3", uiOutput("h_read")),
+      chart_card("h_ind", "Change in GVA of home industries", read = TRUE,
                  radioButtons("h_metric", NULL, c("EUR million" = "eur", "% of own GVA" = "share"), inline = TRUE),
                  div(class = "small text-muted mb-1", textOutput("h_ind_parts")),
                  note = paste("Direct = the industries whose products are bought. First-round suppliers = what",
@@ -419,16 +485,16 @@ ui <- page_navbar(
       h5(class = "mt-4", "How the home economy is built"),
       hint(class = "mb-2", "These views need no shock: they show the country's structure in the chosen year."),
       chart_card("h_expo", "Share of each home industry's GVA that depends on each kind of final demand (%)",
-                 note = paste("Home final demand by category, and all foreign final demand. Each row adds up to",
+                 read = TRUE, note = paste("Home final demand by category, and all foreign final demand. Each row adds up to",
                               "100%. A 10% fall in a category of home demand lowers the industry's GVA by",
                               "10% of its share (before household spending of the lost wages).")),
-      chart_card("h_content", "Where EUR 1 of home final demand ends up", time_panel = TRUE,
+      chart_card("h_content", "Where EUR 1 of home final demand ends up", time_panel = TRUE, read = TRUE,
                  note = paste("All products bought by the country's own buyers, home-made and imported, at basic",
                               "prices. Taxes on products & other = taxes less subsidies on products paid on",
                               "inputs along the chain. Inventories are in the table only (small, can be negative).",
                               "With household spending on, the green part is the extra home GVA it brings, on",
                               "top of the EUR 1.")),
-      chart_card("h_mult", "Where EUR 1 of final demand for a home industry's products ends up",
+      chart_card("h_mult", "Where EUR 1 of final demand for a home industry's products ends up", read = TRUE,
                  radioButtons("h_mult_order", NULL,
                               c("Most stays at home" = "high", "Least stays at home" = "low"), inline = TRUE),
                  note = paste("Per EUR 1 of final demand for the industry's products, whoever buys them.",
@@ -460,18 +526,19 @@ ui <- page_navbar(
              "investment (GFCF), not consumption: for defence procurement use the simulator with ",
              "\"Investment (GFCF)\" and the defence-related industries.")
       ),
-      chart_card("g_share", "Share of GVA that depends on government consumption",
+      guide_box("gov"),
+      chart_card("g_share", "Share of GVA that depends on government consumption", read = TRUE,
                  note = "Home = the country's own government. Foreign = all other governments."),
       chart_card("g_time", "Over time",
                  radioButtons("g_time_measure", NULL,
                               c("Foreign governments" = "foreign", "Home government" = "home", "Both" = "both"),
                               inline = TRUE)),
-      chart_card("g_benef", textOutput("g_benef_title", inline = TRUE))
+      chart_card("g_benef", textOutput("g_benef_title", inline = TRUE), read = TRUE)
     )
   ),
 
-  # ---- 8. Notes ----------------------------------------------------------------------------------------------------
-  nav_panel("Notes", value = "notes",
+  # ---- 8. Guide & notes --------------------------------------------------------------------------------------------
+  nav_panel("Guide & notes", value = "notes",
     div(class = "container", style = "max-width: 860px", markdown(paste(readLines(file.path(root_dir, "app/notes.md"), encoding = "UTF-8"), collapse = "
 ")))
   ),
@@ -530,7 +597,20 @@ server <- function(input, output, session) {
                                  fmt_pct(home), " of GVA."))
     },
     height = function() bar_height(d_sel()$top),
-    file_stub = "va_by_buyer"
+    file_stub = "va_by_buyer",
+    read = function() {
+      s <- d_sel(); a <- d_all(); ova <- d_origin_va()
+      txt <- sprintf("Of every EUR 100 of value added created by %s in %d, %s is finally used at home and %s abroad.",
+                     describe_in(s$c, s$s), s$year, per100(a[domestic == TRUE, sum(va)] / ova),
+                     per100(a[domestic == FALSE, sum(va)] / ova))
+      top <- head(d_buyers()[domestic == FALSE & total > 0], 3)
+      if (nrow(top)) {
+        only <- if (length(s$cats) < length(fd_categories)) paste0(" (counting only ", paste(s$cats, collapse = ", "), ")") else ""
+        txt <- paste0(txt, " The largest foreign buyers", only, " are ",
+                      and_list(sprintf("%s (%s)", top$buyer_name, per100(top$total))), ".")
+      }
+      txt
+    }
   )
 
   output$d_top_time <- renderPlot({
@@ -556,7 +636,22 @@ server <- function(input, output, session) {
                caption = paste0(describe(s$c, s$s), ", ", s$year, ". All final demand categories."))
     },
     height = function() bar_height(d_sel()$top, per_bar = 34),
-    file_stub = "exports_vs_va"
+    file_stub = "exports_vs_va",
+    read = function() {
+      # The buyers with the largest gap between the two shares, in each direction
+      big <- d_exp()[pmax(exports_share, va_share) >= 0.01]
+      if (!nrow(big)) return("")
+      u <- big[which.max(exports_share - va_share)]
+      o <- big[which.max(va_share - exports_share)]
+      paste(c(
+        if (u$exports_share - u$va_share > 0.005)
+          sprintf("%s: %s of direct exports, but only %s of the value added used abroad. Part of what is shipped there is sold on to other countries, or was made with imported parts.",
+                  u$buyer_name, fmt_pct(u$exports_share), fmt_pct(u$va_share)),
+        if (o$va_share - o$exports_share > 0.005)
+          sprintf("%s: %s of the value added used abroad, but only %s of direct exports. Much of it arrives inside other countries' products.",
+                  o$buyer_name, fmt_pct(o$va_share), fmt_pct(o$exports_share))
+      ), collapse = " ")
+    }
   )
 
   d_heat <- reactive({
@@ -586,7 +681,21 @@ server <- function(input, output, session) {
                                  ". Values in % of the row's GVA. RoW = rest of world."))
     },
     height = function() 120 + 30 * length(d_heat()$rows),
-    file_stub = "va_by_buyer_heatmap"
+    file_stub = "va_by_buyer_heatmap",
+    read = function() {
+      long <- d_heat()$long
+      col_name <- function(code) if (code == "RoW") "the rest of the world" else country_names[[code]]
+      fr <- long[col != "Home"]; hm <- long[col == "Home"]
+      b <- if (nrow(fr)) fr[which.max(value)]
+      l <- if (nrow(hm) > 1) hm[which.min(value)]
+      paste(c(
+        if (!is.null(b) && b$value > 0)
+          sprintf("Read along a row. Example: of every EUR 100 of value added in %s, %s is used by final buyers in %s, the largest foreign cell here.",
+                  b$row, per100(b$value), col_name(b$col)),
+        if (!is.null(l))
+          sprintf("%s depends least on home buyers: only %s of every EUR 100 is used at home.", l$row, per100(l$value))
+      ), collapse = " ")
+    }
   )
 
   # ---- 2. Exposure to a source ----------------------------------------------------------------------------------
@@ -620,7 +729,23 @@ server <- function(input, output, session) {
              caption = paste0(input$x_year, ". Results for: ", describe(input$x_show), "."))
     },
     height = function() bar_height(min(nrow(x_res()), num_or(input$x_top, top_n))),
-    file_stub = "exposure_to_source"
+    file_stub = "exposure_to_source",
+    read = function() {
+      tt <- x_total(); show <- describe(input$x_show)
+      txt <- if (input$x_type == "production") {
+        sprintf("If %s stopped altogether, the countries shown (%s) would lose %s of value added, %s of their GVA. A 10%% fall in its output would take away a tenth of this: %s.",
+                production_of(input$x_src_c, input$x_src_s), show, fmt_amount(tt$dep), fmt_pct(tt$share, 2),
+                fmt_amount(tt$dep / 10))
+      } else {
+        sprintf("%s of value added in the countries shown (%s), %s of their GVA, depends on final demand anywhere in the world for %s. If that demand fell by 10%%, they would lose about %s.",
+                fmt_amount(tt$dep), show, fmt_pct(tt$share, 2), products_of(input$x_src_c, input$x_src_s),
+                fmt_amount(tt$dep / 10))
+      }
+      top <- head(x_res()[share > 0], 3)
+      if (nrow(top)) txt <- paste0(txt, " Most exposed: ",
+                                   and_list(sprintf("%s (%s of its own GVA)", top$name, fmt_pct(top$share))), ".")
+      txt
+    }
   )
 
   output$x_res_time <- renderPlot({
@@ -661,7 +786,21 @@ server <- function(input, output, session) {
              caption = paste0(input$o_year, ". Origin GVA: ", fmt_bn(o_res()$origin_va[1]), "."))
     },
     height = function() bar_height(min(nrow(o_res()), num_or(input$o_top, top_n))),
-    file_stub = "sources_of_origin"
+    file_stub = "sources_of_origin",
+    read = function() {
+      r <- o_res(); top <- head(r, 3)
+      if (!nrow(top)) return("")
+      origin <- describe_in(input$o_c, input$o_s)
+      nxt <- if (nrow(top) > 1) paste0(" Next: ", and_list(sprintf("%s (%s)", top$source_name[-1], fmt_pct(top$share[-1], 2))), ".") else ""
+      if (input$o_type == "production") {
+        sprintf("%s of the value added of %s depends on production %s %s: that much would be lost if it stopped.%s These shares overlap (supply chains share suppliers), so do not add them up.",
+                fmt_pct(top$share[1], 2), origin, if (input$o_level == "country") "in" else "of", top$source_name[1], nxt)
+      } else {
+        sprintf("%s of the value added of %s ends up in final products %s %s, wherever they are bought.%s These shares can be added: together, the %s sources in the table account for %s.",
+                fmt_pct(top$share[1], 2), origin, if (input$o_level == "country") "made in" else "of", top$source_name[1],
+                nxt, format(nrow(r), big.mark = ","), fmt_pct(sum(r$share)))
+      }
+    }
   )
 
   # ---- 4. Top pairs -------------------------------------------------------------------------------------------------
@@ -683,7 +822,15 @@ server <- function(input, output, session) {
              caption = paste0(input$p_year, ". Origin ← source. Top 25; the table has more."))
     },
     height = function() bar_height(min(nrow(p_res()), 25)),
-    file_stub = "top_pairs"
+    file_stub = "top_pairs",
+    read = function() {
+      p <- p_res()[1]
+      txt <- sprintf("Tightest link: %s of the value added of %s (%s) depends on %s %s.", fmt_pct(p$share), p$origin,
+                     fmt_amount(p$va_dependent),
+                     if (input$p_type == "production") "production of" else "final demand for products of", p$source)
+      if (p$share >= 0.15) txt <- paste(txt, "Shares this high usually involve a small industry, or one that sells most of its output to one customer: check the EUR columns in the table.")
+      txt
+    }
   )
 
   # ---- 5. Shock simulator ---------------------------------------------------------------------------------------------
@@ -735,9 +882,32 @@ server <- function(input, output, session) {
   induced_note <- function(s) if (s_induced()) paste("of which household spending:", fmt_bn(s$dva_induced, 2)) else ""
   output$s_world_note <- renderText(induced_note(s_world()))
   output$s_shown_note <- renderText(induced_note(s_shown()))
+  output$s_read <- render_reading(function() {
+    s <- s_shown(); w <- s_world()
+    if (s$dva == 0) return("")
+    verb <- function(x) if (x < 0) "falls" else "rises"
+    sprintf("Value added in the countries shown (%s) %s by %s, %s of their GVA. As a rough guide, that %s %s percentage points %s their GDP growth in the year it happens. Worldwide, value added %s by %s.",
+            describe(input$s_show), verb(s$dva), fmt_amount(abs(s$dva)), fmt_pct(abs(s$share_va), 3),
+            if (s$dva < 0) "takes" else "adds", pp_text(100 * s$share_va), if (s$dva < 0) "off" else "to",
+            verb(w$dva), fmt_amount(abs(w$dva)))
+  })
 
   is_production <- reactive(attr(s_impact(), "shock")$what == "production")
   s_countries <- reactive(summarise_impact(s_impact(), "country")[order(share_va)])
+  # The countries in the chart: those shown, or the 20 most affected worldwide
+  s_country_bars <- reactive({
+    d <- s_countries()
+    if (input$s_country_scope == "shown") {
+      d <- d[country %in% expand_countries(input$s_show)]
+    } else {
+      # The buyer countries (final demand) or producer countries (production) where the shock happens
+      shocked <- if (is_production()) unique(s_impact()[in_source == TRUE, country]) else expand_countries(shock_spec()$buyers)
+      rest_of_d <- d[!country %in% shocked]
+      if (!isFALSE(input$s_excl_shocked) && nrow(rest_of_d) > 0) d <- rest_of_d
+      d <- d[order(-abs(share_va))][1:min(.N, 20)]
+    }
+    d[order(-abs(share_va))]
+  })
   wire_card(output, "s_country", s_countries,
     cols = function() {
       cols <- list(country_name = c("Country", "text"), share_va = c("Change, % of GVA", "pct"),
@@ -752,23 +922,21 @@ server <- function(input, output, session) {
       cols
     },
     plot = function() {
-      d <- s_countries()
-      if (input$s_country_scope == "shown") {
-        d <- d[country %in% expand_countries(input$s_show)]
-      } else {
-        # The buyer countries (final demand) or producer countries (production) where the shock happens
-        shocked <- if (is_production()) unique(s_impact()[in_source == TRUE, country]) else expand_countries(shock_spec()$buyers)
-        rest_of_d <- d[!country %in% shocked]
-        if (!isFALSE(input$s_excl_shocked) && nrow(rest_of_d) > 0) d <- rest_of_d
-        d <- d[order(-abs(share_va))][1:min(.N, 20)]
-      }
-      d <- d[order(-abs(share_va))]
+      d <- s_country_bars()
       bars_h(d$country_name, d$share_va, x_title = "Change in GVA, % of the country's GVA",
              highlight = if (input$s_country_scope == "world") d$country %in% expand_countries(input$s_show),
              highlight_names = c("Countries shown", "Other"))
     },
     height = function() bar_height(if (input$s_country_scope == "shown") length(expand_countries(input$s_show)) else 20),
-    file_stub = "shock_by_country"
+    file_stub = "shock_by_country",
+    read = function() {
+      d <- head(s_country_bars(), 3)
+      if (!nrow(d)) return("")
+      where <- if (input$s_country_scope == "shown") "" else if (!isFALSE(input$s_excl_shocked))
+        " outside the countries where the shock happens" else " worldwide"
+      sprintf("Most affected%s: %s.", where,
+              and_list(sprintf("%s (%s of its GVA)", d$country_name, fmt_pct(d$share_va, 3))))
+    }
   )
 
   output$s_cs_parts <- renderText({
@@ -801,7 +969,22 @@ server <- function(input, output, session) {
                    pct = TRUE, x_title = "Change in GVA, % of own GVA")
     },
     height = function() bar_height(num_or(input$s_top, top_n), extra = 135),
-    file_stub = "shock_by_country_industry"
+    file_stub = "shock_by_country_industry",
+    read = function() {
+      d <- s_cs()
+      if (is_production()) d <- d[in_source == FALSE]
+      if (!nrow(d)) return("")
+      d <- d[order(-abs(share_va))][1]
+      t <- s_shown()
+      txt <- sprintf("Most affected country-industry: %s, %s of its own GVA (%s).", d$label, fmt_pct(d$share_va, 2),
+                     fmt_amount(d$dva))
+      if (t$dva != 0) {
+        txt <- paste0(txt, sprintf(" Of the change in the countries shown, %s comes through suppliers (first round and further)%s.",
+                                   fmt_pct((t$dva_first + t$dva_further) / t$dva, 0),
+                                   if (s_induced()) paste0(" and ", fmt_pct(t$dva_induced / t$dva, 0), " through household spending") else ""))
+      }
+      txt
+    }
   )
 
   s_heat <- reactive({
@@ -822,7 +1005,14 @@ server <- function(input, output, session) {
                 caption = "Values in % of the group's GVA in each country.")
     },
     height = function() 420,
-    file_stub = "shock_by_industry_group"
+    file_stub = "shock_by_industry_group",
+    read = function() {
+      h <- s_heat()[is.finite(share_va)]
+      if (!nrow(h)) return("")
+      b <- h[which.max(abs(share_va))]
+      sprintf("Read down a column for one country. The largest change relative to size: %s in %s, %s of the group's GVA.",
+              b$sector_group, country_names[[b$country]], fmt_pct(b$share_va, 2))
+    }
   )
 
   output$s_dl_all <- downloadHandler(
@@ -882,7 +1072,6 @@ server <- function(input, output, session) {
     }
     if (h_induced()) paste(txt, induced_text(h_rate())) else txt
   })
-  eur_per <- function(x) sprintf("EUR %.2f", x)
   output$h_size_out    <- renderText(fmt_bn(h_head()$shock, 2))
   output$h_size_note   <- renderText(if (h_is_production()) "output of the shocked home industries"
                                      else "final demand, basic prices")
@@ -901,6 +1090,28 @@ server <- function(input, output, session) {
   })
   output$h_abroad_out  <- renderText(fmt_bn(h_head()$dva_abroad, 2))
   output$h_abroad_note <- renderText(paste(fmt_pct(h_head()$leakage), "of the change in GVA everywhere"))
+  output$h_read <- render_reading(function() {
+    h <- h_head(); cname <- country_names[[input$h_c]]
+    if (!is.finite(h$home_per_eur)) return("")
+    txt <- if (!h_is_production()) {
+      if (h_induced()) {
+        sprintf("Of each EUR 1 of this shock, %s becomes value added in %s through the supply chain, and %s in all once households adjust their spending to the change in wages. %s becomes value added abroad.",
+                eur_per(h$home_per_eur_type1), cname, eur_per(h$home_per_eur), eur_per(h$abroad_per_eur))
+      } else {
+        sprintf("Of each EUR 1 of this shock, %s becomes value added in %s and %s value added abroad (imports, including the imported parts of home-made products). The remaining %s goes on taxes on products along the supply chain.",
+                eur_per(h$home_per_eur), cname, eur_per(h$abroad_per_eur), eur_per(1 - h$home_per_eur - h$abroad_per_eur))
+      }
+    } else {
+      sprintf("Each EUR 1 of %s output of %s %s %s of value added in %s (%s in the industries themselves and %s in other home industries, %s) and %s abroad, through imported inputs.",
+              if (input$h_size < 0) "lost" else "extra", describe_sectors(input$h_prod_s),
+              if (input$h_size < 0) "takes away" else "brings", eur_per(h$home_per_eur), cname,
+              eur_per((h$dva_home - h$dva_home_other) / h$shock), eur_per(h$dva_home_other / h$shock),
+              if (h_induced()) "household spending included" else "their home suppliers", eur_per(h$abroad_per_eur))
+    }
+    ab <- h_abroad()
+    paste0(txt, sprintf(" In all, %s of the change in value added happens abroad", fmt_pct(h$leakage)),
+           if (nrow(ab)) sprintf("; the largest part in %s (%s).", ab$country_name[1], fmt_amount(abs(ab$dva[1]))) else ".")
+  })
 
   h_ind <- reactive({
     lvl  <- input$h_level
@@ -941,7 +1152,16 @@ server <- function(input, output, session) {
                    caption = paste0(country_names[[input$h_c]], ", ", input$h_year, "."))
     },
     height = function() bar_height(min(nrow(h_ind()), num_or(input$h_top, top_n)), extra = 135),
-    file_stub = "domestic_shock_home_industries"
+    file_stub = "domestic_shock_home_industries",
+    read = function() {
+      d <- head(h_ind(), 3)
+      if (!nrow(d)) return("")
+      pct <- input$h_metric == "share"
+      vals <- if (pct) paste(fmt_pct(abs(d$share), 2), "of its GVA") else fmt_amount(abs(d$change))
+      sprintf("Industries that %s most%s%s: %s.", if (h_head()$dva_home < 0) "lose" else "gain",
+              if (pct) " relative to their size" else "", if (h_is_production()) " (outside the shocked industries)" else "",
+              and_list(sprintf("%s (%s)", d$name, vals)))
+    }
   )
 
   h_abroad <- reactive({
@@ -992,7 +1212,17 @@ server <- function(input, output, session) {
                                  if (input$h_level == "sector") "Largest industries by GVA; the table has all." else ""))
     },
     height = function() 140 + 30 * length(h_expo()$rows),
-    file_stub = "home_industries_by_demand"
+    file_stub = "home_industries_by_demand",
+    read = function() {
+      h <- h_expo(); e <- h$long
+      f <- h$all_rows[1]
+      if (is.na(f)) return("")
+      shr <- function(nm, k) sum(e$share[e$origin_name == nm & e$code == k])
+      fr <- e[code == "FOREIGN"][which.max(share)]
+      sprintf("Example: of every EUR 100 of value added in %s, %s depends on home households, %s on the home government, %s on home investment and %s on buyers abroad. Most dependent on buyers abroad: %s (%s).",
+              f, per100(shr(f, "P3_S14")), per100(shr(f, "P3_S13")), per100(shr(f, "P51G")), per100(shr(f, "FOREIGN")),
+              fr$origin_name, fmt_pct(fr$share))
+    }
   )
 
   # With household spending on, the charts get one more (green) part: the extra home GVA it brings,
@@ -1022,7 +1252,17 @@ server <- function(input, output, session) {
                 caption = paste0(country_names[[input$h_c]], ", ", input$h_year, "."))
     },
     height = function() bar_height(5, per_bar = 36, extra = 120),
-    file_stub = "home_demand_content"
+    file_stub = "home_demand_content",
+    read = function() {
+      d <- h_content(); cats <- d[!code %in% c("P5M", "ALL") & final_demand > 0]
+      hi <- cats[which.max(home_per_eur)]; lo <- cats[which.min(home_per_eur)]; all <- d[code == "ALL"]
+      txt <- sprintf("On average, %s of each EUR 1 that buyers in %s spend becomes home value added. The most stays at home for %s (%s), the least for %s (%s): the more a kind of spending relies on imports, the less stays at home.",
+                     eur_per(all$home_per_eur), country_names[[input$h_c]], short_category(hi$category),
+                     eur_per(hi$home_per_eur), short_category(lo$category), eur_per(lo$home_per_eur))
+      if (h_induced()) txt <- paste(txt, sprintf("Household spending of the extra wages adds %s on average (the green part).",
+                                                 eur_per(all$home_hh_per_eur)))
+      txt
+    }
   )
   output$h_content_time <- renderPlot({
     req(input$h_content_tabs == "Over time")
@@ -1080,7 +1320,15 @@ server <- function(input, output, session) {
                                  fmt_m(num_or(input$h_min_va, 0)), "."))
     },
     height = function() bar_height(min(nrow(h_mult()), num_or(input$h_top, top_n)), extra = if (h_induced()) 145 else 120),
-    file_stub = "home_multipliers"
+    file_stub = "home_multipliers",
+    read = function() {
+      # Households as employers (T) buy no inputs, so all of their euro stays at home: not a useful example
+      m <- h_mult()[sector != "T" & is.finite(total_home)]
+      if (nrow(m) < 2) return("")
+      hi <- m[which.max(total_home)]; lo <- m[which.min(total_home)]
+      sprintf("Of each EUR 1 that buyers anywhere spend on products of %s, %s stays in %s as value added; for %s, only %s. Industries that use many imported inputs keep less at home.",
+              hi$sector_name, eur_per(hi$total_home), country_names[[input$h_c]], lo$sector_name, eur_per(lo$total_home))
+    }
   )
 
   # ---- 7. Government --------------------------------------------------------------------------------------------------
@@ -1101,7 +1349,19 @@ server <- function(input, output, session) {
                 caption = paste0(input$g_year, "."))
     },
     height = function() bar_height(nrow(g_shares())),
-    file_stub = "government_share"
+    file_stub = "government_share",
+    read = function() {
+      g <- g_shares()
+      if (nrow(g) == 1) {
+        sprintf("In %s, %s of value added depends on consumption of its own government, and %s on that of foreign governments.",
+                g$country_name, fmt_pct(g$share_domestic), fmt_pct(g$share_foreign))
+      } else {
+        hi <- g[1]; lo <- g[.N]
+        sprintf("Most dependent: %s, with %s of its value added used by its own government's consumption and %s by foreign governments'. Least dependent: %s, with %s and %s.",
+                hi$country_name, fmt_pct(hi$share_domestic), fmt_pct(hi$share_foreign),
+                lo$country_name, fmt_pct(lo$share_domestic), fmt_pct(lo$share_foreign))
+      }
+    }
   )
 
   g_time <- reactive({
@@ -1126,11 +1386,14 @@ server <- function(input, output, session) {
 
   output$g_benef_title <- renderText(paste0("Who benefits from the consumption of the government of ",
                                             country_names[[input$g_gov]], " (outside ", input$g_gov, ")"))
-  g_benef <- reactive({
+  g_benef_show <- reactive({
     show <- setdiff(expand_countries(input$g_show), input$g_gov)
     validate(need(length(show) > 0, "Choose countries other than the government's own."))
-    imp <- va_from_final_demand(as.integer(input$g_year), buyers = input$g_gov, categories = "P3_S13")
-    s <- summarise_impact(imp, input$g_level, show, num_or(input$g_min_va, 0))
+    show
+  })
+  g_imp <- reactive(va_from_final_demand(as.integer(input$g_year), buyers = input$g_gov, categories = "P3_S13"))
+  g_benef <- reactive({
+    s <- summarise_impact(g_imp(), input$g_level, g_benef_show(), num_or(input$g_min_va, 0))
     s[, name := switch(input$g_level, country = country_name, country_sector = label, sector = sector_name)]
     if (input$g_metric == "share") s[order(-share_va)] else s[order(-dva)]
   })
@@ -1146,7 +1409,15 @@ server <- function(input, output, session) {
       }
     },
     height = function() bar_height(min(nrow(g_benef()), num_or(input$g_top, top_n))),
-    file_stub = "government_beneficiaries"
+    file_stub = "government_beneficiaries",
+    read = function() {
+      s <- g_benef(); t <- summarise_impact(g_imp(), "total", g_benef_show())
+      if (!nrow(s)) return("")
+      sprintf("Consumption of the government of %s supports %s of value added in the countries shown, %s of their GVA. %s: %s (%s of its own GVA, %s).",
+              country_names[[input$g_gov]], fmt_amount(t$dva), fmt_pct(t$share_va, 2),
+              if (input$g_metric == "share") "Most dependent" else "Largest amount",
+              s$name[1], fmt_pct(s$share_va[1], 2), fmt_amount(s$dva[1]))
+    }
   )
 
   # Send the scenario to the simulator and run it there
