@@ -1,0 +1,206 @@
+<h2>What this tool measures</h2>
+<p>All numbers come from the Eurostat <strong>FIGARO</strong> inter-country input-output tables (industry by industry): 49 countries plus the rest of the world, 64 industries each, 2010–2024, EUR million at current prices. Value added is <strong>gross value added (GVA)</strong>: compensation of employees + other net taxes on production + gross operating surplus and mixed income. Taxes on products are not GVA, so the sum of GVA is a little below GDP.</p>
+<p>The model is the standard Leontief model:</p>
+<ul>
+<li><strong>A</strong> = input coefficients (what each country-industry buys from each other one per euro of its output)</li>
+<li><strong>L</strong> = (I − A)⁻¹, the Leontief inverse: output needed everywhere per euro of final demand</li>
+<li><strong>v</strong> = GVA per euro of output</li>
+</ul>
+<h3>Where value added ends up (tab 1)</h3>
+<p>GVA of country-industry <em>r</em> absorbed by final demand category <em>k</em> of buyer country <em>d</em> = v<sub>r</sub> · (L · y<sub>d,k</sub>)<sub>r</sub>. This counts every route: Polish steel in a German car bought by a US household counts for US households. Over all buyers and categories it adds up to 100% of the origin's GVA. <strong>Direct exports vs value added</strong> compares this with gross exports. Gross exports show where goods are shipped. Value added absorbed shows where the origin's own GVA is finally used.</p>
+<h3>Exposure to a source, sources of an origin, top pairs (tabs 2–4)</h3>
+<p>Two ways a source can matter:</p>
+<ul>
+<li><strong>Production of a customer industry.</strong> The source's output is set from outside the model. Its suppliers, at home and abroad, directly and through the supply chain, lose sales when it produces less. The share of GVA of <em>r</em> that depends on the production of <em>s</em> is D[r,s] = L[r,s]·x<sub>s</sub> / (L[s,s]·x<sub>r</sub>). For a group of sources S, the change in output is L<sub>RS</sub>·L<sub>SS</sub>⁻¹·Δx<sub>S</sub>. A 10% fall in the source's output removes 10% of this share. These shares are <strong>not additive</strong> across sources, because supply chains overlap: German car production and German machinery production partly need the same Polish steel.</li>
+<li><strong>Final demand for products.</strong> The share of GVA of <em>r</em> that depends on final demand, by any buyer, for products of <em>s</em>: L[r,s]·y<sub>s</sub> / x<sub>r</sub>. These shares <strong>are additive</strong>. Over all products, home ones included, they sum to 100%.</li>
+</ul>
+<p>The two give different answers for the same pair. Take German cars. &quot;Production&quot; covers all output of the German car industry, including the parts it sells to car makers abroad. &quot;Final demand&quot; covers only the cars bought by final users.</p>
+<h3>Shock simulator (tab 5)</h3>
+<ul>
+<li><strong>Final demand shock:</strong> change any slice of final demand (buyer countries × categories × the country-industries making the products) by a % or by an amount. An amount is spread like current demand. ΔGVA = v · L · Δy.</li>
+<li><strong>Production shock:</strong> change the output of some country-industries by a % or by an amount, as above. The shocked industries change by exactly the shock. Their suppliers change as described above.</li>
+</ul>
+<p><strong>Parts of the effect.</strong> The charts of the most affected industries split each change in GVA into the standard input-output parts. They add up to the total:</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Final demand shock</th>
+<th>Production shock</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Direct</strong></td>
+<td>the industries whose products are bought: v·Δy</td>
+<td>the shocked producers themselves: v·Δx<sub>S</sub> (left out of the charts)</td>
+</tr>
+<tr>
+<td><strong>First-round suppliers</strong></td>
+<td>what they buy directly as inputs: v·AΔy</td>
+<td>v·A<sub>RS</sub>Δx<sub>S</sub></td>
+</tr>
+<tr>
+<td><strong>Further supply-chain rounds</strong></td>
+<td>the suppliers' suppliers, and so on: v·(L − I − A)Δy</td>
+<td>the rest of the supply-chain change</td>
+</tr>
+<tr>
+<td><strong>Household spending</strong></td>
+<td>when the option is on (see below)</td>
+<td>when the option is on</td>
+</tr>
+</tbody>
+</table>
+<p>Example: Polish construction output +EUR 30m creates EUR 15.8m of Polish GVA:</p>
+<ul>
+<li>construction itself: 9.7;</li>
+<li>first-round suppliers: 3.7. Wholesale trade alone gets 0.55, from the merchants' margins on the materials construction buys;</li>
+<li>further rounds: 2.3.</li>
+</ul>
+<p>The model is linear: no price effects and no substitution. Input structures are fixed at the chosen year. By default there are no income effects through household spending: it is an &quot;open&quot; model, so the effects are a lower bound for demand shocks. The option <em>Add household spending of extra wages</em> adds them (see below).</p>
+<h3>Domestic shock (tab 6)</h3>
+<p>A shock inside one country, seen from that country: what happens to its own industries and how much leaks abroad.</p>
+<ul>
+<li>
+<p><strong>Final demand:</strong> the country's own buyers (households, government, investors, …) change their purchases of the chosen products. <em>Home-made and imported, as now</em> keeps their import shares, so part of the shock goes straight to foreign producers. <em>Home-made only</em> changes demand for home products only.</p>
+</li>
+<li>
+<p><strong>Production:</strong> the output of home industries changes. Their suppliers at home and abroad follow, as in the simulator.</p>
+</li>
+<li>
+<p><strong>Home GVA per EUR 1 of shock</strong> = change in home GVA / size of the shock.</p>
+<ul>
+<li>The rest of each euro becomes GVA abroad: the leakage, through imported final goods and imported inputs, directly and further up the chain.</li>
+<li>Or it pays taxes less subsidies on products bought as inputs.</li>
+<li>In a production shock, the size is the output of the shocked industries, including what they buy from each other (e.g. construction subcontracting). So the ratio is lower than for a final demand shock to the same products.</li>
+</ul>
+</li>
+<li>
+<p><strong>Share of each home industry's GVA that depends on each kind of final demand:</strong></p>
+<ul>
+<li><strong>Rows:</strong> each home industry.</li>
+<li><strong>Columns:</strong> home final demand by category, plus all foreign final demand. Each row adds up to 100%.</li>
+<li><strong>Reading it:</strong> a 10% fall in a category of home demand (all products, import shares unchanged) lowers the industry's GVA by 10% of its share.</li>
+</ul>
+</li>
+<li>
+<p><strong>Where EUR 1 of home final demand ends up:</strong></p>
+<ul>
+<li><strong>What is counted:</strong> all products bought by the country's own buyers in each category, home-made and imported, at basic prices.</li>
+<li><strong>The parts:</strong> home GVA, GVA abroad, and taxes on products &amp; other (taxes less subsidies on products paid on inputs, plus two small FIGARO adjustment rows). The three parts add up to 1.</li>
+<li><strong>Link to the shock boxes:</strong> this equals the home GVA per EUR of a shock to a whole category.</li>
+</ul>
+</li>
+<li>
+<p><strong>Where EUR 1 of final demand for a home industry's products ends up</strong> (home multipliers), whoever buys the products:</p>
+<ul>
+<li>the GVA of the industry itself;</li>
+<li>the GVA of other home industries, i.e. its home supply chain;</li>
+<li>GVA abroad;</li>
+<li>taxes &amp; other.</li>
+</ul>
+<p>The table adds the output multiplier: home output per EUR. The figures come from the global inverse, so they include the small feedback through foreign supply chains (e.g. Polish parts in German machines that Poland imports). Households as employers have no inputs, so all of their euro stays with them.</p>
+</li>
+</ul>
+<p>By default these are &quot;Type I&quot; effects: wages earned are not spent again. The next section describes the option that adds this spending.</p>
+<h3>Household spending of extra wages (option in tabs 5 and 6)</h3>
+<p>Without the option, a shock reaches only the supply chain. With it, households also spend part of the extra wages the shock creates. That spending creates more output and wages, and so on, round after round. This is a &quot;Type II&quot; or induced effect, the Keynesian consumption multiplier inside the input-output model.</p>
+<ul>
+<li><strong>Extra wages:</strong> compensation of employees (FIGARO row D1) per EUR of output, by country-industry.</li>
+<li><strong>Spending per EUR of extra wages</strong> (default EUR 0.45, set in <code>config.R</code> and in the sidebar) combines two things:
+<ul>
+<li>the wedge from employer and employee contributions and income tax: for Poland roughly 0.55–0.6 of compensation reaches households;</li>
+<li>the share of that net income that is spent: roughly 0.7–0.9.</li>
+</ul>
+</li>
+<li><strong>What is bought:</strong>
+<ul>
+<li>Households spend like they do now: the same basket and the same import shares.</li>
+<li>Part of every EUR spent goes on VAT and other taxes on products, and on purchases abroad. For Poland, EUR 0.875 of each EUR reaches products at basic prices.</li>
+</ul>
+</li>
+<li><strong>Every country's households</strong> spend their extra wages, not only those of the shocked country. For a shock at home this makes almost no difference. For a shock abroad it matters: when German government spending creates German wages, German households buy CEE goods.</li>
+<li><strong>The loop is solved exactly:</strong> extra wages w = W·Δx₁ + W·L·H·K·w, so w = (I − W·L·H·K)⁻¹·W·Δx₁, and extra output = L·H·K·w. Here W is wages per EUR of output by country, H the household spending mix of each country, and K the spending per EUR of wages at basic prices.</li>
+</ul>
+<p>How much it adds, for Poland in 2024, home GVA per EUR of final demand:</p>
+<table>
+<thead>
+<tr>
+<th>Final demand</th>
+<th>Without</th>
+<th>With household spending (0.45)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Government consumption</td>
+<td>0.85</td>
+<td>1.00</td>
+</tr>
+<tr>
+<td>Household consumption</td>
+<td>0.63</td>
+<td>0.69</td>
+</tr>
+<tr>
+<td>Investment</td>
+<td>0.57</td>
+<td>0.64</td>
+</tr>
+</tbody>
+</table>
+<p>It adds little because each round loses most of its value:</p>
+<ul>
+<li>only 46% of Polish GVA is compensation of employees;</li>
+<li>less than half of compensation is spent;</li>
+<li>12.5% of each EUR spent goes on product taxes and purchases abroad;</li>
+<li>about a third of the rest is imported.</li>
+</ul>
+<p><strong>What it assumes:</strong></p>
+<ul>
+<li>Only wages are spent. Profits and self-employed income are not passed on to households, which keeps the effect conservative.</li>
+<li>Extra output raises wages in proportion, and new spending follows the average basket.</li>
+<li>There are no prices, interest rates, crowding out, saving in anticipation of future taxes, capacity limits, or financing of the shock.</li>
+</ul>
+<p>Read the result with household spending as the upper end of a pure short-run demand effect, and the result without it as the lower end. Neither replaces a macro estimate of fiscal multipliers.</p>
+<p>In a production shock, household spending changes demand for all industries, the shocked ones included. In the charts that leave the shocked industries out, their part is left out too.</p>
+<p>The structural view of which demand each home industry depends on splits the GVA that exists today, so it is always shown without household spending.</p>
+<h3>Government consumption (tab 7)</h3>
+<p>Government final consumption (ESA code P3_S13) is mostly public services produced by the country itself (administration, education, health), plus goods and services provided to households (e.g. medicines). <strong>Military equipment is investment (GFCF, P51G), not government consumption.</strong> FIGARO does not show investment by the institution that buys it. For defence procurement scenarios, use the simulator with &quot;Investment (GFCF)&quot; and the defence-related industries (see config.R).</p>
+<h2>Good to know</h2>
+<ul>
+<li><strong>Small country-industries</strong> can show extreme shares, even above 100% when their final demand is negative (stock drawdowns larger than their output). Rankings of shares leave out country-industries with GVA below the threshold in the sidebar (default from <code>config.R</code>).</li>
+<li><strong>Rest of world (FIGW1)</strong> is one block for all countries not covered separately.</li>
+<li><strong>Current prices:</strong> changes over time mix volumes, prices and exchange rates.</li>
+<li><strong>Data quality:</strong> FIGARO is built from national supply-use tables and trade data and balanced by Eurostat. Detail for small countries and industries is partly estimated.</li>
+</ul>
+<h2>Use the engine in R</h2>
+<p>The app calls functions in <code>R/engine.R</code>. You can call them yourself, e.g. in a Quarto report:</p>
+<pre><code class="language-r">root_dir &lt;- &quot;.&quot;; source(&quot;config.R&quot;); source(&quot;R/engine.R&quot;)
+
+# Where Polish manufacturing GVA ends up, by buyer and category
+va_by_buyer(&quot;PL&quot;, &quot;Manufacturing&quot;, years = 2024)
+
+# German car production -10%: effect on CEE country-industries
+summarise_impact(output_shock(2024, &quot;DE&quot;, &quot;C29&quot;, pct = -10), &quot;country_sector&quot;, &quot;CEE11&quot;)
+
+# German government consumption +EUR 10bn: who gains?
+summarise_impact(fd_shock(2024, buyers = &quot;DE&quot;, categories = &quot;Government&quot;, eur_m = 10000), &quot;country&quot;)
+
+# Polish government consumption +EUR 1bn: Polish industries hit, and the leakage abroad
+g &lt;- domestic_shock(2024, &quot;PL&quot;, categories = &quot;Government&quot;, eur_m = 1000)
+home_vs_abroad(g, &quot;PL&quot;)
+summarise_impact(g, &quot;sector&quot;, &quot;PL&quot;)
+
+# Home GVA per EUR of Polish final demand, by category, 2010-2024; home multipliers by industry
+domestic_content(2010:2024, &quot;PL&quot;)
+domestic_multipliers(2024, &quot;PL&quot;)
+
+# The same shocks with households spending part of the extra wages (EUR 0.45 per EUR; or e.g. 0.6)
+home_vs_abroad(domestic_shock(2024, &quot;PL&quot;, categories = &quot;Government&quot;, eur_m = 1000, induced = TRUE), &quot;PL&quot;)
+domestic_multipliers(2024, &quot;PL&quot;, induced = TRUE, spend_rate = 0.6)
+fd_shock(2024, buyers = &quot;DE&quot;, categories = &quot;Government&quot;, eur_m = 10000, induced = TRUE)
+</code></pre>
+<p>See <code>analysis/examples.R</code> for more, and the long tables in <code>data/tables/</code> (parquet) for your own analysis.</p>
+

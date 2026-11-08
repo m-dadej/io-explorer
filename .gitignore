@@ -1,0 +1,16 @@
+# Data: too large for GitHub. Rebuild it with prepare_data.R from the FIGARO files.
+figaro_tables/
+data/matrices/
+data/model/
+data/tables/
+
+# R and RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Operating system
+Thumbs.db
+.DS_Store
+desktop.ini

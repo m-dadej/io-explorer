@@ -1,0 +1,65 @@
+code,name,group
+A01,Crop and animal production,"Agriculture, forestry, fishing"
+A02,Forestry and logging,"Agriculture, forestry, fishing"
+A03,Fishing and aquaculture,"Agriculture, forestry, fishing"
+B,Mining and quarrying,Mining and utilities
+C10T12,"Food, beverages, tobacco",Manufacturing
+C13T15,"Textiles, apparel, leather",Manufacturing
+C16,Wood products,Manufacturing
+C17,Paper products,Manufacturing
+C18,Printing,Manufacturing
+C19,Coke and refined petroleum,Manufacturing
+C20,Chemicals,Manufacturing
+C21,Pharmaceuticals,Manufacturing
+C22,Rubber and plastics,Manufacturing
+C23,Other non-metallic minerals,Manufacturing
+C24,Basic metals,Manufacturing
+C25,Fabricated metal products,Manufacturing
+C26,"Computers, electronics, optical",Manufacturing
+C27,Electrical equipment,Manufacturing
+C28,Machinery and equipment,Manufacturing
+C29,Motor vehicles,Manufacturing
+C30,Other transport equipment,Manufacturing
+C31_32,Furniture and other manufacturing,Manufacturing
+C33,Repair and installation of machinery,Manufacturing
+D35,"Electricity, gas, steam",Mining and utilities
+E36,Water supply,Mining and utilities
+E37T39,"Sewerage, waste, remediation",Mining and utilities
+F,Construction,Construction
+G45,Motor vehicle trade and repair,"Trade, transport, hospitality"
+G46,Wholesale trade,"Trade, transport, hospitality"
+G47,Retail trade,"Trade, transport, hospitality"
+H49,Land transport,"Trade, transport, hospitality"
+H50,Water transport,"Trade, transport, hospitality"
+H51,Air transport,"Trade, transport, hospitality"
+H52,Warehousing and transport support,"Trade, transport, hospitality"
+H53,Postal and courier,"Trade, transport, hospitality"
+I,Accommodation and food services,"Trade, transport, hospitality"
+J58,Publishing,Information and communication
+J59_60,"Film, TV, broadcasting",Information and communication
+J61,Telecommunications,Information and communication
+J62_63,IT and information services,Information and communication
+K64,Financial services,Finance and real estate
+K65,Insurance and pensions,Finance and real estate
+K66,Auxiliary financial services,Finance and real estate
+L,Real estate,Finance and real estate
+M69_70,"Legal, accounting, consulting",Business services
+M71,Architecture and engineering,Business services
+M72,Scientific research,Business services
+M73,Advertising and market research,Business services
+M74_75,Other professional services,Business services
+N77,Rental and leasing,Business services
+N78,Employment services,Business services
+N79,Travel agencies,Business services
+N80T82,"Security, cleaning, office support",Business services
+O84,Public administration and defence,"Public admin, education, health"
+P85,Education,"Public admin, education, health"
+Q86,Human health,"Public admin, education, health"
+Q87_88,Residential care and social work,"Public admin, education, health"
+R90T92,"Arts, culture, gambling",Other services
+R93,Sports and recreation,Other services
+S94,Membership organisations,Other services
+S95,Repair of computers and household goods,Other services
+S96,Other personal services,Other services
+T,Households as employers,Other services
+U,Extraterritorial organisations,Other services

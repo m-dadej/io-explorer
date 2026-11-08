@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IO Explorer</title>
+  <meta name="description" content="Explore trade in value added between countries and industries and test demand and production shocks, with the Eurostat FIGARO input-output tables.">
+  <link rel="stylesheet" href="lib/tom-select.css">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="lib/d3.min.js"></script>
+  <script src="lib/plot.umd.min.js"></script>
+  <script src="lib/tom-select.complete.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="name">IO Explorer</span>
+      <span class="data-note" id="data-note">Eurostat FIGARO input-output tables</span>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Views"></nav>
+  </header>
+  <div id="errors" class="errors" hidden></div>
+  <main id="main">
+    <div id="loading" class="loading">Loading the data…</div>
+  </main>
+  <div id="status" class="status" hidden></div>
+  <noscript>This page needs JavaScript.</noscript>
+</body>
+</html>
