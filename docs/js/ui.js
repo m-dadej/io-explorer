@@ -152,33 +152,10 @@ export function valueBoxes(container, items) {
   };
 }
 
-// ---- Help for readers ------------------------------------------------------------------------------------
-// The guide box at the top of a tab: the question it answers, a short text and (collapsed) how to read it.
-// g comes from guide.json (made from app/guide.md by R/04_export_web_text.R).
-export function guideBox(g) {
-  return el('div', { class: 'guide' },
-    el('div', { class: 'guide-q' }, g.question),
-    el('div', { html: g.intro }),
-    g.details ? el('details', {}, el('summary', {}, 'How to read it, with examples'), el('div', { html: g.details })) : null);
-}
-// A reading of the results in words ("In plain words: ..."), hidden while there is no text
-export function reading(container = null) {
-  const node = el('div', { class: 'reading', hidden: true });
-  container?.append(node);
-  return {
-    node,
-    setReading(text) {
-      node.hidden = !text;
-      node.replaceChildren(...(text ? [el('span', { class: 'reading-label' }, 'In plain words'), text] : []));
-    }
-  };
-}
-
 // ---- Cards: chart + table + download ------------------------------------------------------------------
 // The chart is drawn by a function of the available width; it is drawn again when the card resizes.
 export function card(container, { title, top = null, note = null }) {
   const titleEl = el('div', { class: 'card-title' }, title);
-  const read = reading();
   const btnChart = el('button', { class: 'active', onclick: () => show('chart') }, 'Chart');
   const btnTable = el('button', { onclick: () => show('table') }, 'Table');
   const chartEl = el('div', { class: 'chart' });
@@ -189,7 +166,7 @@ export function card(container, { title, top = null, note = null }) {
   const tablePane = el('div', { class: 'pane', hidden: true }, tableEl, el('div', { class: 'dl' }, dlBtn));
   const node = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, titleEl, el('div', { class: 'card-tabs' }, btnChart, btnTable)),
-    el('div', { class: 'card-body' }, read.node, chartPane, tablePane));
+    el('div', { class: 'card-body' }, chartPane, tablePane));
   container.append(node);
 
   let draw = null, rows = [], cols = [], stub = 'data', lastWidth = 0;
@@ -212,7 +189,6 @@ export function card(container, { title, top = null, note = null }) {
     node,
     setTitle(t) { titleEl.textContent = t; },
     setParts(text) { partsEl.textContent = text ?? ''; partsEl.hidden = !text; },
-    setReading: read.setReading,
     // chartFn(width) -> node; data rows; cols [{key, label, type}]
     set({ chart, data, columns, file }) {
       draw = chart; rows = data; cols = columns; stub = file ?? stub;
@@ -221,7 +197,7 @@ export function card(container, { title, top = null, note = null }) {
       dlBtn.disabled = false;
     },
     message(text, isError = false) {
-      draw = null; rows = []; this.setParts(null); this.setReading(null);
+      draw = null; rows = []; this.setParts(null);
       chartEl.replaceChildren(message(text, isError));
       tableEl.replaceChildren(message(text, isError));
       dlBtn.disabled = true;

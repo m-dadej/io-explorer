@@ -8,7 +8,7 @@
 #   docs/data/<year>/L.bin      Leontief inverse (3200 x 3200)
 #   docs/data/<year>/A.bin      input coefficients, sparse (zeros left out)
 #   docs/data/years.json        the years on the website
-#   docs/notes.html, guide.json the text pages, by R/04_export_web_text.R (from app/notes.md, guide.md)
+#   docs/notes.html             the notes page (from app/notes.md)
 #
 # Numbers are stored as 4-byte floats (about 7 significant digits): half the size of R's
 # 8-byte numbers and far more precise than the data. Matrices are stored column by column,
@@ -108,11 +108,13 @@ meta <- list(
 )
 write_json(meta, file.path(out_dir, "meta.json"), auto_unbox = TRUE, digits = NA, dataframe = "rows")
 
-# ---- years.json, and the text pages (notes.html, guide.json) ---------------------------------------
+# ---- years.json and notes.html ---------------------------------------------------------------------
 web_years <- sort(as.integer(list.files(file.path(web_dir, "data"), pattern = "^[0-9]{4}$")))
 write_json(list(years = I(web_years), latest = max(web_years)), file.path(web_dir, "data", "years.json"),
            auto_unbox = TRUE)
-source(file.path(root_dir, "R/04_export_web_text.R"))
+notes <- commonmark::markdown_html(readLines(file.path(root_dir, "app/notes.md"), encoding = "UTF-8"),
+                                   extensions = TRUE)
+writeLines(notes, file.path(web_dir, "notes.html"), useBytes = TRUE)
 
 message(sprintf("Exported %d to %s: core %.1f MB, L %.1f MB, A %.1f MB (%.0f%% of coefficients kept; at most %.1e per EUR of output dropped in any column)",
                 web_year, out_dir, meta$bytes$core / 1e6, meta$bytes$L / 1e6, meta$bytes$A / 1e6,
