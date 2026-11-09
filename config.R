@@ -51,9 +51,15 @@ country_groups <- list(
 )
 
 # ---- Industry groups ------------------------------------------------------------------
+# Industries counted as energy in the industry profile (energy cost shares, energy price sensitivity):
+# mining and quarrying (coal, oil and gas, but in FIGARO also ores and stone), refined petroleum products,
+# electricity and gas supply.
+energy_sectors <- c("B", "C19", "D35")
+
 # Broad groups come from data/labels/sectors.csv (column `group`). Add your own here:
 # any name, any list of FIGARO industry codes.
 custom_sector_groups <- list(
+  "Energy"                         = energy_sectors,
   "Market services"                = c("G45", "G46", "G47", "H49", "H50", "H51", "H52", "H53", "I",
                                        "J58", "J59_60", "J61", "J62_63", "K64", "K65", "K66", "L",
                                        "M69_70", "M71", "M72", "M73", "M74_75",

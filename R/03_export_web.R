@@ -4,7 +4,7 @@
 #
 # Writes:
 #   docs/data/<year>/meta.json  labels, groups, defaults, where each array sits in core.bin
-#   docs/data/<year>/core.bin   output, GVA, final demand, GVA by buyer, sales, household loop
+#   docs/data/<year>/core.bin   output, GVA and its parts, final demand, GVA by buyer, sales, household loop
 #   docs/data/<year>/L.bin      Leontief inverse (3200 x 3200)
 #   docs/data/<year>/A.bin      input coefficients, sparse (zeros left out)
 #   docs/data/years.json        the years on the website
@@ -47,7 +47,8 @@ parts <- list(
   va    = core$va,                         # GVA
   v     = core$v,                          # GVA per EUR of output
   wage  = hh$wage,                         # compensation of employees per EUR of output
-  Y     = core$Y,                          # final demand, n x 250 (buyer country x category)
+  gos   = ifelse(core$x > 0, core$va_comp["B2A3G", ] / core$x, 0),   # gross operating surplus per EUR of output
+  Y     = core$Y,                         # final demand, n x 250 (buyer country x category)
   VAD   = core$VAD,                        # GVA by buyer and category, n x 250
   sales = core$sales_int + core$sales_fd,  # gross sales by buyer country, n x 50
   LH    = hh$LH,                           # output per EUR of household spending, n x 50
@@ -98,6 +99,7 @@ meta <- list(
   sector_groups  = lapply(sector_groups, I),
   broad_groups   = I(broad_groups),
   custom_groups  = I(names(custom_sector_groups)),
+  energy_sectors = I(energy_sectors),
   defaults = list(origin = default_origin, focus = default_focus, min_va = min_va_eur_m,
                   top_n = top_n, spend_rate = household_spend_rate),
   core = layout,

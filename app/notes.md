@@ -8,10 +8,33 @@ The model is the standard Leontief model:
 - **L** = (I − A)⁻¹, the Leontief inverse: output needed everywhere per euro of final demand
 - **v** = GVA per euro of output
 
-### Where value added ends up (tab 1)
+### Where value added ends up
 GVA of country-industry *r* absorbed by final demand category *k* of buyer country *d* = v<sub>r</sub> · (L · y<sub>d,k</sub>)<sub>r</sub>. This counts every route: Polish steel in a German car bought by a US household counts for US households. Over all buyers and categories it adds up to 100% of the origin's GVA. **Direct exports vs value added** compares this with gross exports. Gross exports show where goods are shipped. Value added absorbed shows where the origin's own GVA is finally used.
 
-### Exposure to a source, sources of an origin, top pairs (tabs 2–4)
+### Value added in exports
+The other way round: not where an origin's GVA ends up, but what is inside its gross exports. For exports e<sub>r</sub> of country-industry *r* (to the chosen importers; sales within a country are not exports), the GVA of each source country-industry *i* in them is K[i,r] = v<sub>i</sub> · L[i,r] · e<sub>r</sub>. This is the OECD TiVA measure of value added in gross exports.
+
+- **Home GVA:** sources in the exporting country. **Foreign GVA:** sources in other countries, in the inputs it imports, directly and further up the chain. **Taxes on products & other:** taxes less subsidies on products paid on inputs along the chain. The three add up to the exports.
+- **Foreign GVA by source:** which countries or industries it comes from. With a group of exporters (e.g. CEE11), a country of the group is a foreign source for the others: Polish GVA in Czech exports is foreign GVA of Czechia.
+- **Their GVA in other countries' exports:** the origin's GVA that leaves in the exports of other countries, v<sub>i</sub> · Σ<sub>j in d</sub> L[i,j] · e<sub>j</sub> for each exporting country *d*. Foreign GVA in exports looks at value chains from the buyer's side ("backward participation"); this looks at them from the supplier's side ("forward participation").
+- **Two caveats.** Home GVA includes a little GVA that went abroad in exported inputs and came back home in imports. Value added in inputs that cross borders several times counts each time it is exported, so over all countries foreign GVA in exports is more than the value added traded.
+
+Example, 2024: foreign GVA is 51% of Slovak and Hungarian exports, 43% of Czech and 30% of Polish exports. German GVA alone is 5.1% of Polish exports; Chinese GVA 2.5% (1.7% in 2010); Russian GVA fell from 4.8% in 2012 to 0.4%. Polish GVA in German exports is 2.1% of Polish GVA; in other countries' exports in all, 13.7%.
+
+### Industry profile
+One page about some country-industries: e.g. Polish motor vehicles, or motor vehicles in all CEE countries side by side. Totals over several country-industries weight each one by its output.
+
+- **Key figures:** output, GVA and its share of the country's GVA; wage share; operating surplus; exports (sales to other countries) and imported inputs as % of output; home and foreign GVA per EUR of final demand for its products (whole supply chain, as the home multipliers in the Domestic shock tab); its GVA that ends up abroad or depends on government consumption; energy; upstreamness. With several countries there is one column per country.
+- **Energy:** the industries in `energy_sectors` in `config.R` (by default mining and quarrying, refined petroleum products, electricity and gas; FIGARO's mining also has metal ores and stone), in all countries. *Bought directly* is what it buys from them per EUR of output. *Direct and through suppliers* is the price model with all energy prices doubled: the energy in all its inputs, along the whole chain, per EUR of output. *Energy prices +10%* is a tenth of that, as % of its GVA and of its gross operating surplus: the squeeze on margins if it cannot raise its own price.
+- **Upstreamness:** the average number of production steps before its output reaches final users, (L·x)<sub>j</sub> / x<sub>j</sub>. 1 means it sells only to final users; the more of its output goes into other industries' inputs, the higher it is.
+- **What each EUR of output pays for:** inputs from home industries, imported inputs, taxes on products paid on inputs, and its GVA: compensation of employees, gross operating surplus and mixed income, other net taxes on production. They add up to 100%.
+- **Who buys the output:** single buyers (an industry in a country buying it as an input, or the households, government, investors … of a country) or buyer countries.
+- **Where the inputs come from:** *bought directly* is A[i,j], what it buys from each supplier per EUR of output. *Value added along the whole supply chain* is v<sub>i</sub> · L[i,j], the GVA of each source per EUR of final demand for its products, its own GVA included.
+- **Where its value added ends up:** as in Where VA ends up, with home first.
+
+Example: Polish motor vehicles, 2024. Output EUR 52.9 bn, GVA EUR 9.9 bn (19% of output, 1.3% of Polish GVA). 70% of output is exported; imported inputs are 35% of output, and along the whole supply chain 47% of each euro of final demand for Polish cars is foreign GVA. 83% of its GVA ends up in final demand abroad. A 10% rise in energy prices everywhere costs it 5.7% of its GVA, 16% of its operating surplus.
+
+### Exposure to a source, sources of an origin, top pairs
 Two ways a source can matter:
 
 - **Production of a customer industry.** The source's output is set from outside the model. Its suppliers, at home and abroad, directly and through the supply chain, lose sales when it produces less. The share of GVA of *r* that depends on the production of *s* is D[r,s] = L[r,s]·x<sub>s</sub> / (L[s,s]·x<sub>r</sub>). For a group of sources S, the change in output is L<sub>RS</sub>·L<sub>SS</sub>⁻¹·Δx<sub>S</sub>. A 10% fall in the source's output removes 10% of this share. These shares are **not additive** across sources, because supply chains overlap: German car production and German machinery production partly need the same Polish steel.
@@ -19,7 +42,7 @@ Two ways a source can matter:
 
 The two give different answers for the same pair. Take German cars. "Production" covers all output of the German car industry, including the parts it sells to car makers abroad. "Final demand" covers only the cars bought by final users.
 
-### Shock simulator (tab 5)
+### Shock simulator
 - **Final demand shock:** change any slice of final demand (buyer countries × categories × the country-industries making the products) by a % or by an amount. An amount is spread like current demand. ΔGVA = v · L · Δy.
 - **Production shock:** change the output of some country-industries by a % or by an amount, as above. The shocked industries change by exactly the shock. Their suppliers change as described above.
 
@@ -39,7 +62,26 @@ Example: Polish construction output +EUR 30m creates EUR 15.8m of Polish GVA:
 
 The model is linear: these shocks have no price effects and no substitution (the Price shock tab is the price side of the same model, see below). Input structures are fixed at the chosen year. By default there are no income effects through household spending: it is an "open" model, so the effects are a lower bound for demand shocks. The option *Add household spending of extra wages* adds them (see below).
 
-### Domestic shock (tab 6)
+### Trade shock
+A change in what some country-industries (the exporters) sell to some countries (the importers): a tariff, sanctions, a boycott. Unlike a final demand shock in the simulator, it hits **all exports**, inputs for the importers' industries as well as final products, or only one of the two. Sales within a country never count.
+
+- **The shock:** the exporters' sales to the importers change by a % (or by an amount, spread like these exports). Each exporter's change in sales works like a change in final demand for its products: ΔGVA = v · L · Δs. The importers' own production does not change: their industries switch suppliers or do without the inputs.
+- **Who makes up for the change:**
+  - *No one:* the importers' buyers do without. The gross effect on exporters and their suppliers.
+  - *Producers in the importing country:* the same industry there sells more, by the chosen share of the lost sales.
+  - *Producers in other countries:* the same industry in all other countries (not the exporters' countries, not the importer) sells more, in proportion to what each sells to the importer now.
+- **The split by channel**, for each country-industry:
+  - *Own country's sales:* the change that comes from sales changes of producers in its own country: its own exports, and those of its home customers.
+  - *Other countries' sales:* it supplies producers abroad whose sales change. For CEE, the indirect exposure through German exports.
+  - With household spending switched on, the third part is spending of the extra (or lost) wages.
+  
+  The table also has the usual parts: direct (GVA on the change in sales itself), first-round suppliers, further rounds.
+
+Example: EU27 exports to the US −10% (EUR 66 bn), no one makes up for them, 2024. CEE11 GVA falls EUR 4.7 bn, 0.23%; 30% of that comes through other countries' sales. Poland −0.25%, Estonia −0.33%, Hungary −0.28%. With only cars (−25%) and producers in other countries making up all of it, world GVA barely changes, but Slovakia loses 0.26% of its GVA and Mexico gains 0.14%.
+
+What it assumes: the same linear model, no price effects. Lost sales are not redirected to other markets (unless producers elsewhere make up for them), and the importers' buyers do not change what they produce.
+
+### Domestic shock
 A shock inside one country, seen from that country: what happens to its own industries and how much leaks abroad.
 
 - **Final demand:** the country's own buyers (households, government, investors, …) change their purchases of the chosen products. *Home-made and imported, as now* keeps their import shares, so part of the shock goes straight to foreign producers. *Home-made only* changes demand for home products only.
@@ -66,7 +108,7 @@ A shock inside one country, seen from that country: what happens to its own indu
 
 By default these are "Type I" effects: wages earned are not spent again. The next section describes the option that adds this spending.
 
-### Household spending of extra wages (option in tabs 5 and 6)
+### Household spending of extra wages (option in the shock tabs)
 Without the option, a shock reaches only the supply chain. With it, households also spend part of the extra wages the shock creates. That spending creates more output and wages, and so on, round after round. This is a "Type II" or induced effect, the Keynesian consumption multiplier inside the input-output model.
 
 - **Extra wages:** compensation of employees (FIGARO row D1) per EUR of output, by country-industry.
@@ -104,7 +146,7 @@ In a production shock, household spending changes demand for all industries, the
 
 The structural view of which demand each home industry depends on splits the GVA that exists today, so it is always shown without household spending.
 
-### Price shock (tab 7)
+### Price shock
 The same tables, read the other way round. The price of each country-industry's output is the cost of its inputs plus its GVA per euro of output: p = p·A + v, with all prices equal to 1 in the table's year. The output price of the chosen producers S rises by a % set from outside the model, for instance by a world oil price. Every buyer passes its extra input costs on in full, along the whole supply chain, at home and abroad. The price of every other country-industry R moves by
 
 dp<sub>R</sub> = dp<sub>S</sub> · L<sub>SS</sub>⁻¹ · L<sub>SR</sub> = dp<sub>S</sub> · A<sub>SR</sub> · (I − A<sub>RR</sub>)⁻¹
@@ -131,7 +173,7 @@ Example: refined petroleum products (C19) +10% in every country, Polish industri
 - It is separate from the quantity shocks: here a higher price does not lower demand.
 - For goods priced on world markets (oil products, gas, metals), choose World as the producers' countries. A rise in one country only leaves imported products at their old price.
 
-### Government consumption (tab 8)
+### Government consumption
 Government final consumption (ESA code P3_S13) is mostly public services produced by the country itself (administration, education, health), plus goods and services provided to households (e.g. medicines). **Military equipment is investment (GFCF, P51G), not government consumption.** FIGARO does not show investment by the institution that buys it. For defence procurement scenarios, use the simulator with "Investment (GFCF)" and the defence-related industries (see config.R).
 
 ## Good to know
@@ -175,6 +217,21 @@ fd_shock(2024, buyers = "DE", categories = "Government", eur_m = 10000, induced 
 p <- price_shock(2024, "World", "C19", pct = 10)
 summarise_price(p, "sector", "PL", min_va = 100)
 basket_prices(p, "PL")
+
+# EU exports to the US -10%, inputs and final products: CEE countries, split by channel
+t <- trade_shock(2024, "EU27", importers = "US", pct = -10)
+summarise_impact(t, "country", "CEE11")[, .(country, share_va, dva, dva_own, dva_other)]
+
+# Value added in exports: home and foreign GVA in CEE exports; where the foreign GVA in Polish exports comes from
+export_content(2024, "CEE11")
+export_sources(2024, "PL", source_level = "country")
+va_in_others_exports(2024, "PL")$by_exporter
+
+# A profile of Polish motor vehicles (or of all CEE countries: profile_figures(2024, "CEE11", "C29"))
+profile_figures(2024, "PL", "C29")
+profile_costs(2024, "PL", "C29")
+profile_buyers(2024, "PL", "C29")
+profile_suppliers(2024, "PL", "C29", measure = "chain", level = "country")
 ```
 
 See `analysis/examples.R` for more, and the long tables in `data/tables/` (parquet) for your own analysis.

@@ -20,6 +20,16 @@ export const hhLabel = 'From household spending';
 // Parts of a price shock's cost push, and the two price measures by country (grey, blue)
 export const priceColours = [['Direct purchases', '#1a4f9c'], ['Through other suppliers', '#7fb3ee']];
 export const priceMeasures = ['Output prices', 'Household basket'];
+// Value added in exports: home blue, foreign orange, taxes and other grey
+export const exportColours = [['Home GVA', blue], ['Foreign GVA', '#eb6834'], ['Taxes on products & other', rest]];
+// Trade shock: the change in GVA through sales of the country's own producers or of producers abroad
+export const channelColours = [['Own country’s sales', '#1a4f9c'], ['Other countries’ sales', '#7fb3ee'], ['Household spending', hhGreen]];
+// Industry profile: what each EUR of output pays for; buyers; home vs abroad
+export const costColours = [['Compensation of employees', '#184f95'], ['Gross operating surplus', '#3a80d8'],
+  ['Other taxes on production', '#a9cbf2'], ['Inputs from home industries', '#8f8d86'], ['Imported inputs', '#eb6834'],
+  ['Taxes on products & other', '#d9d7cf']];
+export const buyerColours = [['Industries (inputs)', '#184f95'], ['Final buyers', '#7fb3ee']];
+export const homeColours = [blue, '#eb6834'];
 
 const ctx = document.createElement('canvas').getContext('2d');
 ctx.font = '12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -45,9 +55,9 @@ const valueText = (v, percent) => percent ? fmt.pct(v, 2) : `${fmt.num(v, 1)}`;
 const plainNumber = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 2 });
 const tickFormat = percent => percent ? '~%' : x => plainNumber.format(x);
 
-// Horizontal bars, first row on top. highlight(d) -> true paints the bar blue, others grey.
+// Horizontal bars, first row on top. highlight(d) -> true paints the bar blue, others grey (or highlightColours).
 export function barsH(width, { rows, label, value, percent = true, xTitle, caption, highlight = null,
-                               highlightNames = ['Highlighted', 'Other'], tip = null }) {
+                               highlightNames = ['Highlighted', 'Other'], highlightColours = [blue, rest], tip = null }) {
   const labels = rows.map(label);
   const fill = highlight ? d => (highlight(d) ? highlightNames[0] : highlightNames[1]) : blue;
   return Plot.plot({
@@ -55,7 +65,7 @@ export function barsH(width, { rows, label, value, percent = true, xTitle, capti
     style, caption,
     x: { axis: 'top', label: xTitle, labelAnchor: 'left', grid: true, nice: true, tickFormat: tickFormat(percent) },
     y: { domain: labels, label: null, tickSize: 0, tickFormat: rowLabels(labels, width).tickFormat },
-    color: highlight ? { domain: highlightNames, range: [blue, rest], legend: true } : undefined,
+    color: highlight ? { domain: highlightNames, range: highlightColours, legend: true } : undefined,
     marks: [
       Plot.barX(rows, { x: value, y: label, fill, insetTop: 3, insetBottom: 3, tip: true,
                         title: d => tip ? tip(d) : `${label(d)}\n${valueText(value(d), percent)}` }),
@@ -65,7 +75,8 @@ export function barsH(width, { rows, label, value, percent = true, xTitle, capti
 }
 
 // Horizontal stacked bars. rows: {label, category, value}; colours: [[category, colour], ...] in stacking order.
-export function stackedH(width, { rows, colours, percent = true, xTitle, caption, labels = null }) {
+// whole: the parts of each bar add up to 100% (the axis then ends at 100%, not at a rounded 110%).
+export function stackedH(width, { rows, colours, percent = true, xTitle, caption, labels = null, whole = false }) {
   const lab = labels ?? [...new Set(rows.map(r => r.label))];
   const used = colours.filter(([c]) => rows.some(r => r.category === c));
   const domain = used.map(c => c[0]);
@@ -73,7 +84,8 @@ export function stackedH(width, { rows, colours, percent = true, xTitle, caption
   const pos = new Map(), neg = new Map();
   rows.forEach(r => { const m = r.value < 0 ? neg : pos; m.set(r.label, (m.get(r.label) ?? 0) + r.value); });
   const maxPos = Math.max(0, ...pos.values()), minNeg = Math.min(0, ...neg.values());
-  const xDomain = minNeg < 0 && -minNeg < 0.01 * maxPos ? [0, maxPos] : undefined;
+  let xDomain = minNeg < 0 && -minNeg < 0.01 * maxPos ? [0, maxPos] : undefined;
+  if (whole && maxPos <= 1.02) xDomain = [xDomain ? 0 : minNeg, 1];
   return Plot.plot({
     width, height: 72 + 26 * lab.length, marginLeft: rowLabels(lab, width).marginLeft, marginRight: 24, marginTop: 34,
     style, caption,

@@ -34,7 +34,9 @@ const cellFormat = {
   eur: x => fmt.num(x, 0),
   eur1: x => fmt.num(x, 1),
   dec: x => fmt.num(x, 2),
-  num: x => fmt.num(x, 0)
+  num: x => fmt.num(x, 0),
+  // the row says its format (row.type: pct, eur or dec), e.g. a table of key figures
+  auto: (x, row) => row.type === 'pct' ? fmt.pct(x, 1) : row.type === 'eur' ? fmt.num(x, 0) : fmt.num(x, 2)
 };
 
 // ---- Controls --------------------------------------------------------------------------------------
@@ -154,7 +156,8 @@ export function valueBoxes(container, items) {
 
 // ---- Cards: chart + table + download ------------------------------------------------------------------
 // The chart is drawn by a function of the available width; it is drawn again when the card resizes.
-export function card(container, { title, top = null, note = null }) {
+// tableOnly: a card with just the table (and its note and download); pageSize: rows per page of the table.
+export function card(container, { title, top = null, note = null, tableOnly = false, pageSize = 15 }) {
   const titleEl = el('div', { class: 'card-title' }, title);
   const btnChart = el('button', { class: 'active', onclick: () => show('chart') }, 'Chart');
   const btnTable = el('button', { onclick: () => show('table') }, 'Table');
@@ -162,10 +165,11 @@ export function card(container, { title, top = null, note = null }) {
   const partsEl = el('div', { class: 'parts', hidden: true });
   const tableEl = el('div', { class: 'table-wrap' });
   const dlBtn = el('button', { class: 'btn btn-small', onclick: () => download() }, 'Download (Excel)');
-  const chartPane = el('div', { class: 'pane' }, top, partsEl, chartEl, note ? el('div', { class: 'note' }, note) : null);
-  const tablePane = el('div', { class: 'pane', hidden: true }, tableEl, el('div', { class: 'dl' }, dlBtn));
+  const noteEl = () => note ? el('div', { class: 'note' }, note) : null;
+  const chartPane = el('div', { class: 'pane', hidden: tableOnly }, top, partsEl, chartEl, tableOnly ? null : noteEl());
+  const tablePane = el('div', { class: 'pane', hidden: !tableOnly }, tableEl, tableOnly ? noteEl() : null, el('div', { class: 'dl' }, dlBtn));
   const node = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, titleEl, el('div', { class: 'card-tabs' }, btnChart, btnTable)),
+    el('div', { class: 'card-head' }, titleEl, tableOnly ? null : el('div', { class: 'card-tabs' }, btnChart, btnTable)),
     el('div', { class: 'card-body' }, chartPane, tablePane));
   container.append(node);
 
@@ -191,9 +195,9 @@ export function card(container, { title, top = null, note = null }) {
     setParts(text) { partsEl.textContent = text ?? ''; partsEl.hidden = !text; },
     // chartFn(width) -> node; data rows; cols [{key, label, type}]
     set({ chart, data, columns, file }) {
-      draw = chart; rows = data; cols = columns; stub = file ?? stub;
-      redraw(true);
-      renderTable(tableEl, rows, cols);
+      draw = chart ?? null; rows = data; cols = columns; stub = file ?? stub;
+      if (draw) redraw(true); else chartEl.replaceChildren();
+      renderTable(tableEl, rows, cols, pageSize);
       dlBtn.disabled = false;
     },
     message(text, isError = false) {
@@ -233,7 +237,7 @@ export function renderTable(container, rows, cols, pageSize = 15) {
         class: c.type === 'text' ? 'txt' : '', title: 'Sort',
         onclick: () => { if (sortKey === c.key) sortDir = -sortDir; else { sortKey = c.key; sortDir = c.type === 'text' ? 1 : -1; } draw(); }
       }, c.label, sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : '')))),
-      el('tbody', {}, shown.map(row => el('tr', {}, cols.map(c => el('td', { class: c.type === 'text' ? 'txt' : '' }, cellFormat[c.type](row[c.key])))))));
+      el('tbody', {}, shown.map(row => el('tr', {}, cols.map(c => el('td', { class: c.type === 'text' ? 'txt' : '' }, cellFormat[c.type](row[c.key], row)))))));
     pager.replaceChildren(
       el('span', {}, `${r.length} rows`),
       el('button', { class: 'btn btn-small', disabled: page === 0, onclick: () => { page--; draw(); } }, '‹'),

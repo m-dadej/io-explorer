@@ -121,6 +121,34 @@ yh <- pmax(core$Y[, fd$j[fd$buyer == "PL" & fd$code == "P3_S14"]], 0)
 check(abs(basket_prices(pq, "PL", "Households")$dp_source - 0.1 * sum(yh[pq$in_source]) / sum(yh)) < 1e-12,
       "household basket: the producers' own products count with the full rise")
 
+# Trade shocks
+tf <- trade_shock(yr, "EU27", importers = "US", flows = "final", pct = -10)
+check(isTRUE(all.equal(tf$dva, fd_shock(yr, buyers = "US", product_countries = "EU27", pct = -10)$dva)),
+      "trade shock to final products only = final demand shock of the importer")
+tr <- trade_shock(yr, "EU27", "C29", importers = "US", pct = -20, replace = "others", replace_share = 0.5, induced = TRUE)
+check(max(abs(tr$dva_own + tr$dva_other + tr$dva_induced - tr$dva)) < 1e-9 &&
+        abs(sum(tr$dsales) - (attr(tr, "shock")$size + attr(tr, "shock")$made_up)) < 1e-6,
+      "trade shock: the channels add up to the total; sales change = shock + sales made up")
+
+# Value added in exports
+ex <- export_content(yr, "World")
+fw <- va_in_others_exports(yr, "World")
+check(abs(sum(fw$by_exporter$va) - sum(ex$va_foreign)) < 1e-3 && abs(fw$in_own_exports - sum(ex$va_home)) < 1e-3,
+      "GVA in other countries' exports, over all origins = foreign GVA in all exports")
+es <- export_sources(yr, "PL", source_level = "country_sector", foreign_only = FALSE)
+check(abs(sum(es$va) + ex[exporter == "PL", other] - ex[exporter == "PL", exports]) < 1e-6,
+      "home + foreign GVA + taxes & other = gross exports")
+
+# Industry profile
+pc <- profile_costs(yr, "PL", "Manufacturing")
+check(max(abs(pc[, inputs_home + inputs_imported + taxes_other + compensation + other_taxes + gos] - 1)) < 1e-12,
+      "what each EUR of output pays for adds up to 1")
+check(abs(sum(profile_buyers(yr, "PL", "C29")$share) - 1) < 1e-12, "buyers take all of the output")
+pfig <- profile_figures(yr, "PL", "C29")
+check(abs(sum(profile_suppliers(yr, "PL", "C29", "chain", "country")$share) -
+            pfig[figure %in% c("home_va_chain", "foreign_va_chain"), sum(value)]) < 1e-12,
+      "suppliers along the chain add up to home + foreign GVA per EUR")
+
 # ---- Q1. Where does Polish GVA end up? ---------------------------------------------------------
 pl <- va_by_buyer("PL", years = yr)
 pl[, .(share = sum(share)), by = .(buyer_name, domestic)][order(-share)][1:10]
@@ -213,3 +241,26 @@ summarise_price(petro, "sector", "PL", min_va = min_va_eur_m)[1:10,
 merge(basket_prices(petro, "CEE11", "Households")[, .(buyer_name, world = round(100 * dp, 2))],
       basket_prices(price_shock(yr, "PL", "C19", pct = 10), "CEE11", "Households")[
         , .(buyer_name, pl_refineries_only = round(100 * dp, 2))], by = "buyer_name")[order(-world)]
+
+# ---- Q13. Trade shock: EU exports to the US -10% (a tariff), inputs and final products -----------------
+# CEE GVA lost, through own exports and through supplying other countries' exporters (e.g. Germany)
+eu_us <- trade_shock(yr, "EU27", importers = "US", pct = -10)
+summarise_impact(eu_us, "country", "CEE11")[order(share_va), .(country_name, pct_of_gva = round(100 * share_va, 3),
+  eur_m = round(dva), own_country_sales = round(dva_own), other_countries_sales = round(dva_other))]
+
+# Only cars, -25%, and producers in other countries make up for all of it: who loses, who gains
+cars <- trade_shock(yr, "EU27", "C29", importers = "US", pct = -25, replace = "others")
+summarise_impact(cars, "country")[order(share_va)][c(1:5, (.N - 4):.N), .(country_name, pct_of_gva = round(100 * share_va, 3))]
+
+# ---- Q14. Value added in exports: how much of CEE exports is foreign GVA, and from where? -----------------
+export_content(yr, "CEE11")[, .(exporter_name, exports = round(exports), home = round(100 * home_share, 1),
+                                foreign = round(100 * foreign_share, 1))]
+# Chinese, German and Russian GVA in Polish exports over time (% of the exports)
+dcast(over_years(available_years(), function(y) export_sources(y, "PL")[source %in% c("CN", "DE", "RU")]),
+      year ~ source, value.var = "share")
+# Polish GVA that leaves in other countries' exports
+head(va_in_others_exports(yr, "PL")$by_exporter[, .(exporter_name, va = round(va), pct_of_pl_gva = round(100 * share_origin_va, 2))])
+
+# ---- Q15. Industry profile: motor vehicles in CEE, side by side -----------------------------------------------
+dcast(profile_figures(yr, "CEE11", "C29")[figure %in% c("exports", "imported_inputs", "foreign_va_chain", "energy10_gos")],
+      label ~ part, value.var = "value")

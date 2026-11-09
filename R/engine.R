@@ -32,6 +32,15 @@
 #                          rises (cost push, passed on along the supply chain)
 #   summarise_price()      a price shock by country, industry, country-sector, ...
 #   basket_prices()        price change of what households, government, investors buy, by country
+#   trade_shock()          a change in what exporters sell to importers (tariffs, sanctions), final products
+#                          and inputs, with or without other producers making up for the lost sales
+#   export_content()       home GVA, foreign GVA and other in gross exports (value added in exports)
+#   export_sources()       where the foreign GVA in exports comes from, by source country or industry
+#   va_in_others_exports() an origin's GVA that leaves in other countries' exports
+#   profile_figures()      key figures of some country-industries (cost shares, exports, multipliers, energy)
+#   profile_costs()        what each EUR of their output pays for
+#   profile_buyers()       who buys their output
+#   profile_suppliers()    where their inputs and the value added in them come from
 #
 # Shocks and the domestic functions take induced = TRUE to add household spending of the extra
 # wages, round after round (a "Type II" effect; spend rate in config.R).
@@ -54,6 +63,7 @@ sectors   <- fread(file.path(labels_dir, "sectors.csv"),   encoding = "UTF-8")
 n_c <- nrow(countries); n_s <- nrow(sectors); n <- n_c * n_s; n_k <- length(fd_categories)
 country_groups$World <- countries$code
 country_names <- setNames(countries$name, countries$code)
+country_codes <- countries$code   # (for functions with an argument called `countries`)
 
 sector_groups <- c(
   list("All sectors" = sectors$code),
@@ -380,6 +390,7 @@ output_shock <- function(year = default_year, source_countries, source_sectors =
 #   dva_induced_excl_source = household spending part without the shocked source. (Outside the
 #                      source the direct part is 0; in a production shock the source has no
 #                      first-round or further part, so dva_excl_source = first + further + this.)
+#   dsales, dva_own, dva_other = summed too when the impact has them (a trade shock, see trade_shock())
 summarise_impact <- function(impact, level = c("country", "country_sector", "sector", "sector_group",
                                                "country_sector_group", "total"),
                              countries = "World", min_va = 0) {
@@ -399,6 +410,11 @@ summarise_impact <- function(impact, level = c("country", "country_sector", "sec
                 dva_direct = sum(dva_direct), dva_first = sum(dva_first), dva_further = sum(dva_further),
                 dva_induced = sum(dva_induced), dva_induced_excl_source = sum(dva_induced[!in_source]),
                 in_source = all(in_source)), by = by]
+  extra <- intersect(c("dsales", "dva_own", "dva_other"), names(dt))
+  if (length(extra)) {
+    ex  <- dt[, lapply(.SD, sum), by = by, .SDcols = extra]
+    out <- if (length(by)) out[ex, on = by] else cbind(out, ex)
+  }
   out[, share_va := dva / va]
   if ("country" %in% by) {
     out[country_va, country_va := i.country_va, on = "country"]
@@ -778,6 +794,373 @@ basket_prices <- function(price, buyers = "World", categories = c("P3_S14", "P3_
   out[, `:=`(dp_other = dp - dp_source, buyer_name = country_names[buyer])]
   setcolorder(out, c("buyer", "buyer_name"))
   out[]
+}
+
+# ---- 8. Trade-flow shocks ---------------------------------------------------------------------------
+# Gross exports of each country-industry to each importer country, EUR m (n x importers). Sales within a
+# country are not exports and count as 0. flows: "all" (to industries and to final buyers), "final" (to
+# final buyers: households, government, investment, ...), "intermediate" (to industries, as inputs).
+exports_to <- function(year, importers, flows = c("all", "final", "intermediate")) {
+  flows <- match.arg(flows)
+  core <- load_core(year)
+  B <- expand_countries(importers)
+  F <- switch(flows, all = core$sales_int + core$sales_fd, final = core$sales_fd, intermediate = core$sales_int)
+  F <- F[, B, drop = FALSE]
+  F[outer(cs$country, B, "==")] <- 0
+  F
+}
+
+# A change in what some country-industries (exporters) sell to some countries (importers): tariffs,
+# sanctions, a boycott. pct changes these exports by a % (eur_m: an amount in total, spread like them).
+# Who makes up for the lost sales (replace):
+#   "none"      nobody: the importers' buyers do without. The gross effect on exporters and their suppliers.
+#   "importer"  producers of the same industry in the importing country
+#   "others"    producers of the same industry in other countries (neither the exporters' countries nor the
+#               importer), in proportion to what they sell to the importer now
+# replace_share = the share of the change they make up (0-1). When exports rise, they lose that share.
+# Each producer's change in sales (exporters, and those who make up for them) works like a change in final
+# demand for its products: dx = L dy. The importers' own production does not change: their industries
+# switch suppliers or do without the inputs.
+# Returns an impact table (see new_impact()) with three more columns:
+#   dsales     change in the country-industry's sales: the shock itself, or the sales it makes up
+#   dva_own    the part of dva that comes from changes in sales of producers in its own country (its own
+#              exports, and its home customers' exports)
+#   dva_other  the part that comes from changes in sales of producers in other countries, which it supplies
+#              (e.g. Polish parts in German cars exported to the US)
+# dva = dva_own + dva_other + dva_induced. The direct part (dva_direct) is GVA on the sales change itself.
+trade_shock <- function(year = default_year, exporters, exporter_sectors = "All sectors", importers,
+                        flows = c("all", "final", "intermediate"), pct = NULL, eur_m = NULL,
+                        replace = c("none", "importer", "others"), replace_share = 1,
+                        induced = FALSE, spend_rate = household_spend_rate, decompose = TRUE) {
+  flows <- match.arg(flows); replace <- match.arg(replace)
+  if (is.null(pct) == is.null(eur_m)) stop("Give either pct or eur_m")
+  if (!is.numeric(replace_share) || length(replace_share) != 1 || is.na(replace_share) ||
+      replace_share < 0 || replace_share > 1) stop("The share made up must be between 0 and 1")
+  core <- load_core(year)
+  L    <- load_L(year)
+  O    <- select_cs(exporters, exporter_sectors)
+  B    <- expand_countries(importers)
+  F    <- exports_to(year, B, flows)
+  FO   <- F[O, , drop = FALSE]
+  if (!any(FO != 0)) stop("The exporters sell nothing to the importers")
+  if (!is.null(pct)) {
+    dS <- FO * pct / 100
+  } else {
+    w <- pmax(FO, 0)
+    if (sum(w) <= 0) stop("The exporters sell nothing to the importers")
+    dS <- eur_m * w / sum(w)
+  }
+  dy <- numeric(n)
+  dy[O] <- rowSums(dS)
+
+  made_up <- 0
+  if (replace != "none" && replace_share > 0) {
+    excluded <- expand_countries(exporters)
+    for (b in seq_along(B)) {
+      need <- -replace_share * rowsum(dS[, b], cs$sector[O], reorder = FALSE)[, 1]   # by industry
+      for (s in names(need)[need != 0]) {
+        if (replace == "importer") {
+          k <- which(cs$country == B[b] & cs$sector == s)
+          wk <- 1
+        } else {
+          k  <- which(cs$sector == s & !cs$country %in% c(excluded, B[b]))
+          wk <- pmax(F[k, b], 0)
+          if (sum(wk) <= 0) next   # nobody else sells this to the importer
+          wk <- wk / sum(wk)
+        }
+        dy[k] <- dy[k] + need[[s]] * wk
+        made_up <- made_up + need[[s]]
+      }
+    }
+  }
+
+  nz <- which(dy != 0)
+  dx <- as.vector(L[, nz, drop = FALSE] %*% dy[nz])
+  own <- numeric(n)                       # output change from sales changes of the same country's producers
+  for (cc in unique(cs$country[nz])) {
+    r <- which(cs$country == cc)
+    k <- intersect(r, nz)
+    own[r] <- L[r, k, drop = FALSE] %*% dy[k]
+  }
+  direct <- first <- NULL
+  if (decompose) {
+    direct <- dy
+    first  <- as.vector(load_A(year)[, nz, drop = FALSE] %*% dy[nz])
+  }
+  imp <- new_impact(year, dx, O, sum(dS), "trade", direct, first,
+                    if (induced) induced_output(year, dx, spend_rate), if (induced) spend_rate)
+  imp[, `:=`(dsales = dy, dva_own = core$v * own, dva_other = core$v * (dx - own))]
+  setattr(imp, "shock", c(attr(imp, "shock"),
+                          list(exports = sum(FO), made_up = made_up, flows = flows, replace = replace,
+                               replace_share = replace_share)))
+  imp[]
+}
+
+# ---- 9. Value added in exports ----------------------------------------------------------------------
+# Gross exports e of the exporter country-industries to the importers (all flows, sales within a country
+# left out), and the value added they contain, by source country-industry: K[i, r] = v_i L[i, r] e_r (the
+# OECD TiVA measure of value added in gross exports). For each exporter, home GVA + foreign GVA + other
+# (taxes less subsidies on products paid along the chain) = its gross exports. Home GVA includes a little
+# that comes back home in imports, and value added in inputs that cross borders several times counts each
+# time it is exported.
+export_va <- function(year, exporters, exporter_sectors = "All sectors", importers = "World") {
+  core <- load_core(year)
+  e <- pmax(rowSums(exports_to(year, importers)), 0)   # (a few are negative: foreign buyers running down stocks)
+  R <- select_cs(exporters, exporter_sectors)
+  R <- R[e[R] > 0]
+  if (!length(R)) stop("These exporters sell nothing to the importers")
+  list(R = R, e = e[R], K = core$v * load_L(year)[, R, drop = FALSE] * rep(e[R], each = n),
+       home = outer(cs$country, cs$country[R], "=="))
+}
+
+# Keys and names for rows grouped by "total", "country", "sector" or "country_sector"
+group_key <- function(rows, by) switch(by,
+  total          = rep("Total", length(rows)),
+  country        = cs$country[rows],
+  sector         = cs$sector[rows],
+  country_sector = paste(cs$country[rows], cs$sector[rows], sep = "_"))
+group_name <- function(keys, by) unname(switch(by,
+  total          = keys,
+  country        = country_names[keys],
+  sector         = sector_names[keys],
+  country_sector = cs$label[match(keys, paste(cs$country, cs$sector, sep = "_"))]))
+
+# One row per exporter (by: "country", "sector", "country_sector" or "total"): gross exports and the home
+# GVA, foreign GVA and other in them (EUR m), and the same as shares of the exports. Home = the exporting
+# country's own GVA (for a group of countries: each one's own).
+export_content <- function(year = default_year, exporters, exporter_sectors = "All sectors", importers = "World",
+                           by = c("country", "sector", "country_sector", "total")) {
+  by <- match.arg(by)
+  x  <- export_va(year, exporters, exporter_sectors, importers)
+  dt <- data.table(exporter = group_key(x$R, by), exports = x$e,
+                   va_home = colSums(x$K * x$home), va_foreign = colSums(x$K * !x$home))
+  out <- dt[, .(exports = sum(exports), va_home = sum(va_home), va_foreign = sum(va_foreign)), by = exporter]
+  out[, `:=`(year = year, exporter_name = group_name(exporter, by), other = exports - va_home - va_foreign)]
+  out[, `:=`(home_share = va_home / exports, foreign_share = va_foreign / exports, other_share = other / exports)]
+  setcolorder(out, c("year", "exporter", "exporter_name"))
+  out[order(-foreign_share)][]
+}
+
+# Where the value added in the exports comes from: one row per (exporter, source), with the GVA of the source
+# in the exporter's gross exports (va, EUR m) and its share of those exports. by: exporters as in
+# export_content() ("total", "country" or "sector"); source_level: "country", "country_sector" or "sector"
+# (an industry in all countries together). home = the source is in the exporting country; foreign_only
+# leaves those rows out.
+export_sources <- function(year = default_year, exporters, exporter_sectors = "All sectors", importers = "World",
+                           by = c("total", "country", "sector"),
+                           source_level = c("country", "country_sector", "sector"), foreign_only = TRUE) {
+  by <- match.arg(by); source_level <- match.arg(source_level)
+  x   <- export_va(year, exporters, exporter_sectors, importers)
+  key <- group_key(x$R, by)
+  src <- group_key(seq_len(n), source_level)
+  exports <- tapply(x$e, key, sum)
+  parts <- list(list(home = FALSE, K = x$K * !x$home))
+  if (!foreign_only) parts <- c(parts, list(list(home = TRUE, K = x$K * x$home)))
+  out <- rbindlist(lapply(parts, function(p) {
+    by_key <- t(rowsum(t(p$K), key, reorder = FALSE))      # n x exporters
+    agg    <- rowsum(by_key, src, reorder = FALSE)         # sources x exporters
+    data.table(exporter = rep(colnames(agg), each = nrow(agg)), source = rep(rownames(agg), times = ncol(agg)),
+               home = p$home, va = as.vector(agg))
+  }))
+  out <- out[va != 0]
+  out[, `:=`(year = year, exporter_name = group_name(exporter, by), source_name = group_name(source, source_level),
+             exports = as.vector(exports[exporter]))]
+  out[, share := va / exports]
+  if (source_level != "sector") out[, source_country := sub("_.*$", "", source)]
+  setcolorder(out, c("year", "exporter", "exporter_name", "source", "source_name", "home", "va", "share", "exports"))
+  out[order(-va)][]
+}
+
+# GVA of an origin that leaves in other countries' gross exports (to the importers), by exporting country d:
+# v_i sum_{j in d} L[i, j] e_j over the origin's country-industries i, for each d other than i's own country.
+# (Forward participation in value chains: e.g. Polish GVA in German exports.) Returns a list:
+#   by_exporter     one row per exporting country: its exports, the origin's GVA in them, as a share of the
+#                   origin's GVA and of the exports
+#   origin_va       the origin's GVA
+#   in_own_exports  the origin's GVA in its own country's exports (the home part of export_content())
+va_in_others_exports <- function(year = default_year, origin_countries, origin_sectors = "All sectors",
+                                 importers = "World") {
+  core <- load_core(year)
+  e    <- pmax(rowSums(exports_to(year, importers)), 0)
+  O    <- select_cs(origin_countries, origin_sectors)
+  by_c <- diag(n_c)[rep(seq_len(n_c), each = n_s), ]                   # n x 50: rows summed to countries
+  M    <- (core$v[O] * load_L(year)[O, , drop = FALSE]) %*% (e * by_c)  # origin rows x exporting countries
+  own  <- outer(cs$country[O], countries$code, "==")
+  va_O <- sum(core$va[O])
+  dt <- data.table(year = year, exporter = countries$code, exporter_name = unname(country_names[countries$code]),
+                   exports = colSums(e * by_c), va = colSums(M * !own))
+  dt[, `:=`(share_origin_va = va / va_O, share_of_exports = va / exports)]
+  list(by_exporter = dt[va != 0][order(-va)], origin_va = va_O, in_own_exports = sum(M[own]))
+}
+
+# ---- 10. Profile of country-industries ----------------------------------------------------------------
+# Key figures, cost structure, buyers and suppliers of a selection of country-industries (e.g. Polish motor
+# vehicles, or motor vehicles in all CEE countries). Totals over several country-industries are weighted by
+# output. Country-industries with no output are left out.
+profile_rows <- function(year, countries, sectors) {
+  P <- select_cs(countries, sectors)
+  P <- P[load_core(year)$x[P] > 0]
+  if (!length(P)) stop("The selection has no output")
+  P
+}
+
+# The figures of profile_figures(), in this order: name, label and format (pct = share 0-1, eur = EUR m,
+# dec = a number)
+profile_labels <- data.table(
+  figure = c("output", "va", "va_share_country", "va_per_output", "wage_share", "gos_output",
+             "exports", "exports_final", "imported_inputs", "home_va_chain", "foreign_va_chain", "output_mult",
+             "va_abroad", "va_gov", "energy_direct", "energy_total", "energy10_va", "energy10_gos", "upstream"),
+  label  = c("Output, EUR m", "Gross value added (GVA), EUR m", "Share of the country's GVA",
+             "GVA per EUR of output", "Compensation of employees, % of GVA",
+             "Gross operating surplus and mixed income, % of output",
+             "Exports, % of output", "Of which final products, % of output",
+             "Imported inputs, % of output (bought directly)",
+             "Home GVA per EUR of final demand for its products (whole supply chain)",
+             "Foreign GVA per EUR of final demand for its products (whole supply chain)",
+             "Home output per EUR of final demand for its products",
+             "Its GVA that ends up in final demand abroad, % of GVA",
+             "Its GVA that depends on government consumption (home and abroad), % of GVA",
+             "Energy bought directly, % of output",
+             "Energy cost, direct and through suppliers, % of output",
+             "Energy prices +10% worldwide: extra cost, % of GVA",
+             "Energy prices +10% worldwide: extra cost, % of gross operating surplus",
+             "Production steps to final users (upstreamness; 1 = sells only to final users)"),
+  type   = c("eur", "eur", "pct", "pct", "pct", "pct", "pct", "pct", "pct", "pct", "pct", "dec",
+             "pct", "pct", "pct", "pct", "pct", "pct", "dec")
+)
+
+# Key figures: one row per (part, figure). Parts: "Total" and, when the selection has several countries, each
+# country (its country-industries in the selection). Energy = energy_sectors in config.R, in all countries;
+# "energy cost, direct and through suppliers" is the extra cost per EUR of output if all energy prices doubled
+# and every supplier passed it on (the price model, see price_shock()).
+profile_figures <- function(year = default_year, countries, sectors = "All sectors") {
+  core <- load_core(year); L <- load_L(year); A <- load_A(year)
+  P  <- profile_rows(year, countries, sectors)
+  x  <- core$x[P]
+  cP <- cs$country[P]
+  W  <- core$va_comp[, P, drop = FALSE]
+  home   <- outer(cs$country, cP, "==")            # n x |P|: the supplier is in the row's own country
+  own_b  <- outer(cP, country_codes, "==")        # |P| x 50: the buyer country is the row's own
+  own_fd <- outer(cP, fd$buyer, "==")              # |P| x 250
+  Ap <- A[, P, drop = FALSE]
+  Lp <- L[, P, drop = FALSE]
+  vL <- core$v * Lp
+  energy <- price_shock(year, "World", energy_sectors, pct = 100)
+  d <- data.table(
+    country          = cP, x = x, va = core$va[P], wage = W["D1", ], gos = W["B2A3G", ],
+    exports          = rowSums((core$sales_int[P, , drop = FALSE] + core$sales_fd[P, , drop = FALSE]) * !own_b),
+    exports_final    = rowSums(core$sales_fd[P, , drop = FALSE] * !own_b),
+    imported         = colSums(Ap * !home) * x,
+    va_home_chain    = colSums(vL * home) * x,
+    va_foreign_chain = colSums(vL * !home) * x,
+    output_mult      = colSums(Lp * home) * x,
+    va_abroad        = rowSums(core$VAD[P, , drop = FALSE] * !own_fd),
+    va_gov           = rowSums(core$VAD[P, fd$code == "P3_S13", drop = FALSE]),
+    energy_direct    = colSums(Ap[select_cs("World", energy_sectors), , drop = FALSE]) * x,
+    energy_total     = (energy$dp_direct[P] + energy$dp_indirect[P]) * x,
+    upstream         = as.vector(L[P, , drop = FALSE] %*% pmax(core$x, 0))   # (L x)_j: output-weighted U
+  )
+  country_va <- rowsum(core$va, cs$country, reorder = FALSE)[, 1]
+  parts <- list(Total = seq_along(P))
+  if (length(unique(cP)) > 1) parts <- c(parts, split(seq_along(P), factor(cP, levels = unique(cP))))
+  out <- rbindlist(lapply(names(parts), function(p) {
+    s <- d[parts[[p]]]
+    X <- sum(s$x); V <- sum(s$va); G <- sum(s$gos)
+    vals <- c(output = X, va = V, va_share_country = V / sum(country_va[unique(s$country)]),
+              va_per_output = V / X, wage_share = sum(s$wage) / V, gos_output = G / X,
+              exports = sum(s$exports) / X, exports_final = sum(s$exports_final) / X,
+              imported_inputs = sum(s$imported) / X, home_va_chain = sum(s$va_home_chain) / X,
+              foreign_va_chain = sum(s$va_foreign_chain) / X, output_mult = sum(s$output_mult) / X,
+              va_abroad = sum(s$va_abroad) / V, va_gov = sum(s$va_gov) / V,
+              energy_direct = sum(s$energy_direct) / X, energy_total = sum(s$energy_total) / X,
+              energy10_va = 0.1 * sum(s$energy_total) / V,
+              energy10_gos = if (G > 0) 0.1 * sum(s$energy_total) / G else NA_real_,
+              upstream = sum(s$upstream) / X)
+    data.table(year = year, part = p, part_name = if (p == "Total") "Total" else country_names[[p]],
+               figure = names(vals), value = unname(vals))
+  }))
+  out[profile_labels, on = "figure", `:=`(label = i.label, type = i.type)][]
+}
+
+# What each EUR of output pays for: one row per country-industry of the selection (largest output first),
+# with the total on top when there are several. Shares of output: inputs from home industries, imported
+# inputs, taxes on products & other (paid on inputs), compensation of employees, other net taxes on production,
+# gross operating surplus and mixed income. They add up to 1.
+profile_costs <- function(year = default_year, countries, sectors = "All sectors") {
+  core <- load_core(year); A <- load_A(year)
+  P  <- profile_rows(year, countries, sectors)
+  x  <- core$x[P]
+  Ap <- A[, P, drop = FALSE]
+  home <- outer(cs$country, cs$country[P], "==")
+  W  <- core$va_comp[, P, drop = FALSE]
+  d <- data.table(part = cs$label[P], country = cs$country[P], sector = cs$sector[P], x = x, va = core$va[P],
+                  inputs_home = colSums(Ap * home) * x, inputs_imported = colSums(Ap * !home) * x,
+                  compensation = W["D1", ], other_taxes = W["D29X39", ], gos = W["B2A3G", ])
+  d[, taxes_other := x - inputs_home - inputs_imported - va]
+  d <- d[order(-x)]
+  parts <- c("inputs_home", "inputs_imported", "taxes_other", "compensation", "other_taxes", "gos")
+  if (nrow(d) > 1) {
+    tot <- d[, c(list(part = "Total", country = NA_character_, sector = NA_character_),
+                 lapply(.SD, sum)), .SDcols = c("x", "va", parts)]
+    d <- rbind(tot, d)
+  }
+  d[, (parts) := lapply(.SD, function(v) v / x), .SDcols = parts]
+  d[, year := year][]
+}
+
+# Who buys the selection's output, as a share of its output.
+#   level "buyer":   single buyers: industries in each country (buying inputs) and final buyers in each
+#                    country (households, government, investment, ...)
+#   level "country": buyer countries, split into industries and final buyers; the first row is home (each
+#                    country-industry's own country)
+profile_buyers <- function(year = default_year, countries, sectors = "All sectors", level = c("buyer", "country")) {
+  level <- match.arg(level)
+  core <- load_core(year)
+  P <- profile_rows(year, countries, sectors)
+  X <- sum(core$x[P])
+  if (level == "buyer") {
+    z <- colSums(load_A(year)[P, , drop = FALSE]) * core$x     # sales to each industry
+    y <- colSums(core$Y[P, , drop = FALSE])                    # sales to each final buyer
+    out <- rbind(data.table(buyer = cs$label, country = cs$country, type = "Industries (inputs)", sales = z),
+                 data.table(buyer = paste(short_code(fd$buyer), fd$category), country = fd$buyer,
+                            type = "Final buyers", sales = y))
+    out <- out[sales != 0][order(-sales)]
+  } else {
+    cP  <- cs$country[P]
+    own <- outer(cP, country_codes, "==")
+    si  <- core$sales_int[P, , drop = FALSE]
+    sf  <- core$sales_fd[P, , drop = FALSE]
+    home_name <- if (length(unique(cP)) == 1) paste(country_names[[cP[1]]], "(home)") else "Home (each one's own country)"
+    out <- rbind(data.table(buyer = home_name, country = NA_character_, industries = sum(si[own]), final = sum(sf[own])),
+                 data.table(buyer = unname(country_names[country_codes]), country = country_codes,
+                            industries = colSums(si * !own), final = colSums(sf * !own)))
+    out[, sales := industries + final]
+    out <- rbind(out[1], out[-1][sales != 0][order(-sales)])
+  }
+  out[, `:=`(year = year, share = sales / X)][]
+}
+
+# Where the selection's inputs come from.
+#   measure "direct": what it buys from each supplier, per EUR of its output
+#   measure "chain":  GVA of each source along the whole supply chain per EUR of final demand for its
+#                     products (its own GVA included); several country-industries weighted by output
+# level: "country_sector", "country" or "sector" (an industry in all countries together). home = the source is
+# in the country of the country-industry that buys from it.
+profile_suppliers <- function(year = default_year, countries, sectors = "All sectors",
+                              measure = c("direct", "chain"), level = c("country_sector", "country", "sector")) {
+  measure <- match.arg(measure); level <- match.arg(level)
+  core <- load_core(year)
+  P <- profile_rows(year, countries, sectors)
+  w <- core$x[P] / sum(core$x[P])
+  M <- if (measure == "direct") load_A(year)[, P, drop = FALSE] else core$v * load_L(year)[, P, drop = FALSE]
+  home <- outer(cs$country, cs$country[P], "==")
+  src  <- group_key(seq_len(n), level)
+  out <- rbind(data.table(source = src, home = TRUE,  share = as.vector((M * home) %*% w)),
+               data.table(source = src, home = FALSE, share = as.vector((M * !home) %*% w)))
+  out <- out[, .(share = sum(share)), by = .(source, home)][share != 0]
+  out[, `:=`(year = year, source_name = group_name(source, level))]
+  if (level != "sector") out[, source_country := sub("_.*$", "", source)]
+  out[order(-share)][]
 }
 
 # ---- Several years at once --------------------------------------------------------------------------

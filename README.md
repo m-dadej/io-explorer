@@ -10,6 +10,9 @@ It answers questions such as:
 - How much of each country's value added depends on government consumption, at home and abroad?
 - A shock at home: if Polish government consumption rises EUR 1bn, or Polish construction output falls 10%, which Polish industries gain or lose, and how much leaks abroad? How much of each euro of home demand stays at home, by category and by industry?
 - A price shock: if prices of refined petroleum products rise 10% worldwide, how much do the output prices of Polish industries rise, through their own fuel bills and through their suppliers? What does it cost them, as a share of their GVA, and how much dearer is the household basket?
+- A trade shock: if a tariff cuts EU exports to the US by 10%, inputs and final products, how much GVA does each CEE country lose, directly and as a supplier to German exporters? What if producers elsewhere make up for the lost sales?
+- What is inside exports: how much of Slovak or Polish exports is foreign value added, and from which countries and industries? How much Polish GVA leaves in German exports?
+- A profile of an industry, e.g. Polish motor vehicles or cars in all CEE countries side by side: what each euro of output pays for, who buys it, where its inputs and the value added in them come from, its exports, multipliers and sensitivity to energy prices.
 
 ## How to run
 
@@ -39,7 +42,7 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 
 | File | What it does |
 |---|---|
-| `config.R` | **All settings**: folders, FIGARO edition and years, country groups (CEE11, EU27, …), your own industry groups, household spend rate, ranking thresholds |
+| `config.R` | **All settings**: folders, FIGARO edition and years, country groups (CEE11, EU27, …), your own industry groups, the energy industries of the profile, household spend rate, ranking thresholds |
 | `data/labels/countries.csv`, `sectors.csv` | Country names; industry names and broad groups |
 | `prepare_data.R` | Runs the two data steps below |
 | `R/01_import.R` | Reads each FIGARO CSV into matrices: intermediate use Z, final demand Y, value added. Checks that each table balances |
@@ -55,10 +58,13 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 | Tab | What you see |
 |---|---|
 | Where VA ends up | An origin's GVA by buyer country and final demand category; direct exports vs value added; a heatmap by origin industry or country; over time |
+| VA in exports | Gross exports of some exporters (e.g. CEE11, or PL motor vehicles) and the value added in them: home GVA, foreign GVA and taxes & other, by exporting country or industry; foreign GVA by source country, country-industry or industry; a heatmap of sources; their GVA in other countries' exports; over time |
+| Industry profile | One or more country-industries (e.g. PL motor vehicles, or C29 in all CEE countries): key figures (cost shares, exports, imported inputs, multipliers, energy cost and the squeeze of a 10% energy price rise, upstreamness; one column per country), what each EUR of output pays for, who buys the output, where the inputs and the value added in them come from, where its GVA ends up |
 | Exposure to a source | Who depends on a source (e.g. DE motor vehicles): share of GVA, by country-industry, country or industry; over time |
 | Sources of an origin | What an origin (e.g. PL, or PL basic metals) depends on most: single foreign country-industries, whole countries or industries |
 | Top pairs | The most exposed pairs of (origin country-industry, source country-industry) |
 | Shock simulator | Any final demand or production shock, in % or EUR. Results by country, country-industry and industry group, split into direct, first-round suppliers, further supply-chain rounds and household spending; Excel download |
+| Trade shock | A change in what exporters sell to importers (e.g. EU exports to the US −10%), all exports or only final products or only inputs, with no one, the importer's own producers or producers elsewhere making up for it. Results by country, country-industry and industry group, split into the change through the country's own sales and through other countries' sales it supplies; Excel download |
 | Domestic shock | A shock to a country's own final demand or production. You see the effect on its own industries, the leakage abroad by country, and home GVA per EUR of shock. Three structural views need no shock: (1) which kind of home demand each industry depends on, (2) where EUR 1 of home demand ends up, by category and over time, and (3) home multipliers by industry |
 | Price shock | A rise in the output price of some producers (e.g. oil products in every country), passed on in full along the supply chain. You see the price change of every industry, split into its own direct purchases and what other suppliers pass on, the extra cost in EUR and as % of GVA, output prices and the household, government and investment baskets by country, and a heatmap by industry group; Excel download |
 | Government | GVA depending on government consumption at home and abroad, who benefits from a given government, a one-click scenario |

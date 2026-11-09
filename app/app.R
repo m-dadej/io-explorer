@@ -124,6 +124,13 @@ chart_card <- function(id, title, ..., time_panel = FALSE, note = NULL) {
   }
   do.call(navset_card_tab, c(list(id = paste0(id, "_tabs"), title = title, full_screen = TRUE), panels))
 }
+# A card with only a table and its download
+table_card <- function(id, title, note = NULL) {
+  card(full_screen = TRUE, card_header(title),
+       card_body(reactableOutput(paste0(id, "_table")),
+                 if (!is.null(note)) hint(note),
+                 div(downloadButton(paste0(id, "_dl"), "Download (Excel)", class = "btn-sm btn-outline-secondary"))))
+}
 
 # ---- Tables -----------------------------------------------------------------------------------
 # `cols`: named list, column -> c(header, type); type is "text", "pct" (0-1), "eur" (EUR m), "eur1",
@@ -231,6 +238,103 @@ ui <- page_navbar(
                               inline = TRUE),
                  note = paste("Home = final demand in the row's own country (not coloured, so that differences",
                               "between foreign buyers show). Largest 15 rows by GVA, top 8 foreign buyers."))
+    )
+  ),
+
+  # ---- Value added in exports -------------------------------------------------------------------------
+  nav_panel("VA in exports", value = "exva",
+    layout_sidebar(fillable = FALSE, border = FALSE,
+      sidebar = sidebar(width = 310,
+        pick_countries("e_c", "Exporters: countries", default_focus),
+        pick_sectors("e_s", "Exporters: industries"),
+        pick_countries("e_imp", "Exports to", "World"),
+        pick_year("e_year"),
+        pick_top("e_top", 15),
+        hint("Gross exports of the chosen country-industries and the value added in them: GVA of the exporting ",
+             "country itself (home), GVA of other countries in the inputs it imports, directly and through the ",
+             "supply chain (foreign), and taxes on products paid along the chain (other). This is the OECD TiVA ",
+             "measure of value added in gross exports. Sales within a country are not exports.")
+      ),
+      layout_column_wrap(width = 1 / 4, fill = FALSE,
+        vbox("Gross exports", "e_exports", textOutput("e_exports_note", inline = TRUE)),
+        vbox("Home value added", "e_home", "share of the exports"),
+        vbox("Foreign value added", "e_foreign", textOutput("e_foreign_note", inline = TRUE)),
+        vbox("Their GVA in other countries' exports", "e_fwd_out", textOutput("e_fwd_note", inline = TRUE))
+      ),
+      chart_card("e_rows", "Value added in gross exports: home, foreign and other (% of exports)",
+                 radioButtons("e_rows_by", NULL, c("By exporting country" = "country", "By exporting industry" = "sector"),
+                              inline = TRUE),
+                 time_panel = TRUE,
+                 note = paste("Home GVA = value added of the exporting country itself (it can include a little that",
+                              "comes back home in imports). Foreign GVA = value added of other countries in the",
+                              "inputs, directly and through the supply chain. Taxes & other = taxes less subsidies on",
+                              "products paid on inputs along the chain. Largest rows by exports, most foreign first.")),
+      chart_card("e_src", "Foreign value added in these exports, by source (% of the exports)",
+                 radioButtons("e_src_level", NULL, c("Source countries" = "country",
+                                                     "Source country-industries" = "country_sector",
+                                                     "Source industries" = "sector"), inline = TRUE),
+                 time_panel = TRUE,
+                 note = paste("Value added of other countries in the exports, all exporters together. With several",
+                              "exporting countries, a country in the selection is a foreign source for the others",
+                              "(e.g. Polish GVA in Czech exports). Source industries add up all countries.")),
+      chart_card("e_heat", "Foreign value added by source country (% of the row's exports)",
+                 note = "Rows as in the first chart (largest by exports). Columns: the 8 largest foreign sources."),
+      chart_card("e_fwd", "Their GVA in other countries' exports, by exporting country",
+                 radioButtons("e_fwd_metric", NULL, c("% of their GVA" = "origin", "% of that country's exports" = "exports"),
+                              inline = TRUE),
+                 note = paste("The other side of value chains: value added of the chosen country-industries that",
+                              "leaves in the exports of other countries (e.g. Polish parts in German car exports),",
+                              "directly or through their suppliers."))
+    )
+  ),
+
+  # ---- Industry profile ------------------------------------------------------------------------------
+  nav_panel("Industry profile", value = "prof",
+    layout_sidebar(fillable = FALSE, border = FALSE,
+      sidebar = sidebar(width = 310,
+        pick_countries("f_c", "Countries", default_origin),
+        pick_sectors("f_s", "Industries", "C29"),
+        pick_year("f_year"),
+        pick_top("f_top", 15),
+        hint("A profile of the chosen country-industries: what their output pays for, who buys it, where their ",
+             "inputs come from and where their value added ends up. Choose several countries to compare them in ",
+             "the key figures. Totals over several country-industries are weighted by output.")
+      ),
+      div(class = "mb-2", strong(textOutput("f_desc"))),
+      layout_column_wrap(width = 1 / 4, fill = FALSE,
+        vbox("Output", "f_output", textOutput("f_output_note", inline = TRUE)),
+        vbox("Share of the country's GVA", "f_share", textOutput("f_share_note", inline = TRUE)),
+        vbox("Exports", "f_exports", textOutput("f_exports_note", inline = TRUE)),
+        vbox("GVA that ends up abroad", "f_abroad", "in final demand of other countries")
+      ),
+      table_card("f_key", "Key figures",
+                 note = paste("Energy = mining and quarrying, refined petroleum products, electricity and gas",
+                              "(energy_sectors in config.R; FIGARO's mining also has ores and stone), in all",
+                              "countries. Direct and through suppliers = what the energy in all inputs costs, along",
+                              "the whole supply chain (the price model with full pass-through, see Notes).",
+                              "Upstreamness = average number of production steps before the output reaches final users.")),
+      chart_card("f_cost", "What each EUR of output pays for",
+                 note = paste("Inputs from home industries and imported inputs: what it buys directly. Taxes on",
+                              "products & other: paid on its inputs. The rest is its GVA: compensation of employees,",
+                              "gross operating surplus and mixed income, and other net taxes on production.")),
+      chart_card("f_buy", "Who buys the output (% of output)",
+                 radioButtons("f_buy_level", NULL, c("Single buyers" = "buyer", "Buyer countries" = "country"),
+                              inline = TRUE),
+                 note = paste("Industries buy it as an input; final buyers are households, government, investment",
+                              "(GFCF), NPISH and inventories of each country. Home = the producing country.")),
+      chart_card("f_sup", "Where the inputs come from",
+                 div(class = "d-flex flex-wrap column-gap-4",
+                     radioButtons("f_sup_measure", NULL, c("Bought directly (% of output)" = "direct",
+                                                           "Value added along the whole supply chain" = "chain"),
+                                  inline = TRUE),
+                     radioButtons("f_sup_level", NULL, c("Country-industries" = "country_sector", "Countries" = "country",
+                                                         "Industries" = "sector"), inline = TRUE)),
+                 note = paste("Bought directly: its purchases from each supplier per EUR of its output. Value added",
+                              "along the whole supply chain: GVA of each source per EUR of final demand for its",
+                              "products, its own GVA and its suppliers' suppliers included.")),
+      chart_card("f_dest", "Where its value added ends up (% of its GVA)",
+                 note = paste("Final demand that absorbs its GVA, directly or through other countries' exports",
+                              "(as in the tab Where VA ends up). Home first, then the largest foreign buyers."))
     )
   ),
 
@@ -362,6 +466,58 @@ ui <- page_navbar(
                               "producers themselves are left out of the chart.")),
       chart_card("s_heat", "Change in GVA by broad industry group (% of the group's GVA)"),
       downloadButton("s_dl_all", "Download all results (Excel)", class = "btn-outline-secondary mb-4")
+    )
+  ),
+
+  # ---- Trade shock: a change in what exporters sell to importers ----------------------------------------------
+  nav_panel("Trade shock", value = "trade",
+    layout_sidebar(fillable = FALSE, border = FALSE,
+      sidebar = sidebar(width = 310,
+        pick_countries("t_exp_c", "Exporters: countries", "EU27"),
+        pick_sectors("t_exp_s", "Exporters: industries"),
+        pick_countries("t_imp", "Importers: countries", "US"),
+        radioButtons("t_flows", "Exports of",
+                     c("Everything (inputs and final products)" = "all", "Final products only" = "final",
+                       "Inputs for industries only" = "intermediate")),
+        radioButtons("t_unit", "Size given as", c("% change" = "pct", "EUR million" = "eur"), inline = TRUE),
+        numericInput("t_size", "Size", -10),
+        radioButtons("t_replace", "Who makes up for the change",
+                     c("No one" = "none", "Producers in the importing country" = "importer",
+                       "Producers in other countries" = "others")),
+        conditionalPanel("input.t_replace != 'none'",
+          numericInput("t_share", "Share they make up (%)", 100, min = 0, max = 100, step = 10)),
+        pick_year("t_year"),
+        pick_induced("t"),
+        hr(),
+        pick_countries("t_show", "Show results for", default_focus),
+        pick_min_va("t_min_va"),
+        pick_top("t_top"),
+        hint("Exports of the exporters to the importers change, final products and inputs (e.g. a tariff that ",
+             "cuts EU exports to the US). Sales within a country never count. The exporters and their suppliers, ",
+             "at home and abroad, lose the sales. ", strong("Who makes up for the change: "), "no one (the gross ",
+             "effect), producers of the same industries in the importing country, or in other countries (in ",
+             "proportion to what they sell there now). The importers' own production does not change.")
+      ),
+      div(class = "mb-2", strong(textOutput("t_desc"))),
+      layout_column_wrap(width = 1 / 4, fill = FALSE,
+        vbox("Change in exports", "t_size_out", textOutput("t_size_note", inline = TRUE)),
+        vbox("Made up by other producers", "t_made", textOutput("t_made_note", inline = TRUE)),
+        vbox("Change in world GVA", "t_world", textOutput("t_world_note", inline = TRUE)),
+        vbox("Change in GVA of the countries shown", "t_shown", textOutput("t_shown_note", inline = TRUE))
+      ),
+      chart_card("t_country", "Change in GVA by country (% of the country's GVA)",
+                 radioButtons("t_country_scope", NULL,
+                              c("Countries shown" = "shown", "20 most affected worldwide" = "world"), inline = TRUE),
+                 note = paste("Own country's sales = changes in sales of producers in the same country: its own",
+                              "exports, and the exports of its home customers. Other countries' sales = it supplies",
+                              "producers abroad whose sales change (e.g. Polish parts in German cars exported to",
+                              "the US). Household spending = spending of the extra wages (when switched on).")),
+      chart_card("t_cs", "Most affected country-industries (% of their own GVA)",
+                 div(class = "small text-muted mb-1", textOutput("t_cs_parts")),
+                 note = paste("Split as in the chart above. The table also has the usual parts: direct (GVA on the",
+                              "sales change itself), first-round suppliers and further supply-chain rounds.")),
+      chart_card("t_heat", "Change in GVA by broad industry group (% of the group's GVA)"),
+      downloadButton("t_dl_all", "Download all results (Excel)", class = "btn-outline-secondary mb-4")
     )
   ),
 
@@ -1353,6 +1509,426 @@ server <- function(input, output, session) {
                     induced = isTRUE(input$s_induced), rate = input$s_rate))   # keeps the simulator's setting
     nav_select("tabs", "sim")
   })
+
+  # An engine error becomes a message in the card
+  or_message <- function(expr) tryCatch(expr, error = function(e) validate(need(FALSE, conditionMessage(e))))
+
+  # ---- Value added in exports -----------------------------------------------------------------------------------
+  e_sel <- reactive({
+    need_sel(input$e_c, input$e_s, input$e_imp)
+    list(c = input$e_c, s = input$e_s, imp = input$e_imp, year = as.integer(input$e_year),
+         top = max(1, num_or(input$e_top, 15)))
+  })
+  e_what <- function() {
+    s <- e_sel()
+    paste0(describe(s$c, s$s), ", ", if (identical(s$imp, "World")) "all exports" else paste("exports to", describe(s$imp)),
+           ", ", s$year, ".")
+  }
+  e_total <- reactive({ s <- e_sel(); or_message(export_content(s$year, s$c, s$s, s$imp, by = "total")) })
+  e_src_c <- reactive({ s <- e_sel(); or_message(export_sources(s$year, s$c, s$s, s$imp, source_level = "country")) })
+  e_fwd   <- reactive({ s <- e_sel(); or_message(va_in_others_exports(s$year, s$c, s$s, s$imp)) })
+
+  output$e_exports      <- renderText(fmt_bn(e_total()$exports))
+  output$e_exports_note <- renderText(if (identical(e_sel()$imp, "World")) "to all other countries"
+                                      else paste("to", describe(e_sel()$imp)))
+  output$e_home         <- renderText(fmt_pct(e_total()$home_share))
+  output$e_foreign      <- renderText(fmt_pct(e_total()$foreign_share))
+  output$e_foreign_note <- renderText(paste("share of the exports; of which from EU27 countries:",
+                                            fmt_pct(e_src_c()[source %in% eu27, sum(share)])))
+  output$e_fwd_out      <- renderText(fmt_pct(sum(e_fwd()$by_exporter$va) / e_fwd()$origin_va))
+  output$e_fwd_note     <- renderText(paste("of their GVA; in their own country's exports:",
+                                            fmt_pct(e_fwd()$in_own_exports / e_fwd()$origin_va)))
+
+  export_parts <- c(home_share = "Home GVA", foreign_share = "Foreign GVA", other_share = "Taxes on products & other")
+  e_rows_all <- reactive({ s <- e_sel(); or_message(export_content(s$year, s$c, s$s, s$imp, by = input$e_rows_by)) })
+  e_rows_top <- reactive(head(e_rows_all()[order(-exports)], e_sel()$top)[order(-foreign_share)])
+  wire_card(output, "e_rows", e_rows_all,
+    cols = function() list(exporter_name = c(name_col(input$e_rows_by), "text"), exports = c("Gross exports, EUR m", "eur"),
+                           home_share = c("Home GVA", "pct"), foreign_share = c("Foreign GVA", "pct"),
+                           other_share = c("Taxes on products & other", "pct"), va_home = c("Home GVA, EUR m", "eur"),
+                           va_foreign = c("Foreign GVA, EUR m", "eur")),
+    plot = function() {
+      d <- e_rows_top()
+      long <- rbindlist(lapply(names(export_parts), function(p)
+        data.table(label = d$exporter_name, category = export_parts[[p]], value = d[[p]])))
+      stacked_h(as.data.frame(long), x_title = "Share of gross exports", colours = export_colours, caption = e_what())
+    },
+    height = function() bar_height(nrow(e_rows_top()), extra = 120),
+    file_stub = "va_in_exports"
+  )
+  output$e_rows_time <- renderPlot({
+    req(input$e_rows_tabs == "Over time")
+    s <- e_sel(); top <- head(e_rows_all()[order(-exports)]$exporter_name, 6)
+    d <- withProgress(message = "Computing all years", value = 0, {
+      rbindlist(lapply(yrs, function(y) {
+        incProgress(1 / length(yrs))
+        r <- or_message(export_content(y, s$c, s$s, s$imp, by = input$e_rows_by))
+        r[exporter_name %in% top, .(year = y, series = exporter_name, value = foreign_share)]
+      }))
+    })
+    lines_t(d, levels = top, y_title = "Foreign GVA, % of gross exports",
+            caption = paste0(describe(s$c, s$s), ". The six largest by exports in ", s$year, "."))
+  }, height = 440, res = 96)
+
+  e_src <- reactive({
+    s <- e_sel()
+    or_message(export_sources(s$year, s$c, s$s, s$imp, source_level = input$e_src_level))
+  })
+  wire_card(output, "e_src", e_src,
+    cols = list(source_name = c("Source", "text"), share = c("Share of the exports", "pct"),
+                va = c("GVA in the exports, EUR m", "eur1")),
+    plot = function() {
+      d <- head(e_src(), e_sel()$top)
+      by_country <- input$e_src_level != "sector"
+      bars_h(d$source_name, d$share, x_title = "Share of the gross exports",
+             highlight = if (by_country) d$source_country %in% eu27, highlight_names = c("EU27", "Outside the EU27"),
+             caption = paste0(e_what(), " Foreign GVA in all: ", fmt_pct(e_total()$foreign_share), " of the exports."))
+    },
+    height = function() bar_height(min(nrow(e_src()), e_sel()$top)),
+    file_stub = "va_in_exports_sources"
+  )
+  output$e_src_time <- renderPlot({
+    req(input$e_src_tabs == "Over time")
+    s <- e_sel(); top <- head(e_src()$source_name, 6)
+    d <- withProgress(message = "Computing all years", value = 0, {
+      rbindlist(lapply(yrs, function(y) {
+        incProgress(1 / length(yrs))
+        r <- or_message(export_sources(y, s$c, s$s, s$imp, source_level = input$e_src_level))
+        r[source_name %in% top, .(year = y, series = source_name, value = share)]
+      }))
+    })
+    lines_t(d, levels = top, y_title = "Share of the gross exports",
+            caption = paste0(describe(s$c, s$s), ". The six largest foreign sources in ", s$year, "."))
+  }, height = 440, res = 96)
+
+  e_heat <- reactive({
+    s <- e_sel(); lvl <- input$e_rows_by
+    rows <- e_rows_top()
+    cols <- head(e_src_c()$source, 8)
+    src <- or_message(export_sources(s$year, s$c, s$s, s$imp, by = lvl, source_level = "country"))
+    long <- CJ(row = rows$exporter_name, source = cols, sorted = FALSE)
+    long[src[, .(row = exporter_name, source, value = share)], value := i.value, on = c("row", "source")]
+    long[is.na(value), value := 0]
+    long[, col := short_code(source)]
+    list(long = long, rows = rows$exporter_name, cols = short_code(cols))
+  })
+  e_heat_wide <- reactive({
+    h <- e_heat()
+    w <- dcast(h$long, row ~ col, value.var = "value")
+    w[match(h$rows, row), c("row", h$cols), with = FALSE]
+  })
+  wire_card(output, "e_heat", e_heat_wide,
+    cols = function() c(list(row = c(name_col(input$e_rows_by), "text")),
+                        setNames(lapply(e_heat()$cols, function(k) c(k, "pct")), e_heat()$cols)),
+    plot = function() {
+      h <- e_heat()
+      heatmap_t(as.data.frame(h$long[, .(row, col, value)]), h$rows, h$cols,
+                caption = paste(e_what(), "Values in % of the row's gross exports. RoW = rest of world."))
+    },
+    height = function() 120 + 30 * length(e_heat()$rows),
+    file_stub = "va_in_exports_heatmap"
+  )
+
+  e_fwd_tab <- reactive({
+    d <- copy(e_fwd()$by_exporter)
+    d[, metric := if (input$e_fwd_metric == "origin") share_origin_va else share_of_exports]
+    d[order(-metric)]
+  })
+  wire_card(output, "e_fwd", e_fwd_tab,
+    cols = list(exporter_name = c("Exporting country", "text"), va = c("Their GVA in its exports, EUR m", "eur1"),
+                share_origin_va = c("% of their GVA", "pct"), share_of_exports = c("% of its exports", "pct"),
+                exports = c("Its gross exports, EUR m", "eur")),
+    plot = function() {
+      d <- head(e_fwd_tab(), e_sel()$top)
+      validate(need(nrow(d) > 0, "No value added in other countries' exports."))
+      origin <- input$e_fwd_metric == "origin"
+      bars_h(d$exporter_name, d$metric,
+             x_title = if (origin) "Share of their GVA" else "Share of the exporting country's gross exports",
+             caption = paste0(describe(e_sel()$c, e_sel()$s), " in the ",
+                              if (identical(e_sel()$imp, "World")) "exports" else paste("exports to", describe(e_sel()$imp)),
+                              " of other countries, ", e_sel()$year, ". In all: ",
+                              fmt_pct(sum(e_fwd()$by_exporter$va) / e_fwd()$origin_va), " of their GVA."))
+    },
+    height = function() bar_height(min(nrow(e_fwd_tab()), e_sel()$top)),
+    file_stub = "va_in_other_countries_exports"
+  )
+
+  # ---- Industry profile ---------------------------------------------------------------------------------------
+  f_sel <- reactive({
+    need_sel(input$f_c, input$f_s)
+    list(c = input$f_c, s = input$f_s, year = as.integer(input$f_year), top = max(1, num_or(input$f_top, 15)))
+  })
+  f_fig <- reactive({ s <- f_sel(); or_message(profile_figures(s$year, s$c, s$s)) })
+  f_val <- function(name, which_part = "Total") f_fig()[figure == name & part == which_part, value]
+  f_what <- function() paste0(describe(f_sel()$c, f_sel()$s), ", ", f_sel()$year, ".")
+  output$f_desc        <- renderText(f_what())
+  output$f_output      <- renderText(fmt_bn(f_val("output")))
+  output$f_output_note <- renderText(paste0("GVA ", fmt_bn(f_val("va")), ", ", fmt_pct(f_val("va_per_output")), " of output"))
+  output$f_share       <- renderText(fmt_pct(f_val("va_share_country"), 2))
+  output$f_share_note  <- renderText(paste("of the GVA of", describe(f_sel()$c)))
+  output$f_exports     <- renderText(fmt_pct(f_val("exports")))
+  output$f_exports_note <- renderText(paste("of output; of which final products:", fmt_pct(f_val("exports_final"))))
+  output$f_abroad      <- renderText(fmt_pct(f_val("va_abroad")))
+
+  # Key figures: one row per figure, one column per part (total, and each country)
+  f_key <- reactive({
+    f <- f_fig()
+    parts <- unique(f$part_name)
+    w <- dcast(f, figure ~ part_name, value.var = "value")
+    w <- w[match(profile_labels$figure, figure)]
+    w[, `:=`(label = profile_labels$label, type = profile_labels$type)]
+    setcolorder(w, c("figure", "label", "type", parts))
+    w
+  })
+  fmt_figure <- function(v, type) {
+    ifelse(is.na(v), "–", ifelse(type == "pct", sprintf("%.1f%%", 100 * v),
+                          ifelse(type == "eur", formatC(v, format = "f", digits = 0, big.mark = ","), sprintf("%.2f", v))))
+  }
+  output$f_key_table <- renderReactable({
+    w <- f_key(); parts <- setdiff(names(w), c("figure", "label", "type"))
+    shown <- data.frame(Figure = w$label, lapply(setNames(parts, parts), function(p) fmt_figure(w[[p]], w$type)),
+                        check.names = FALSE)
+    reactable(shown, columns = c(list(Figure = colDef(minWidth = 320)),
+                                 setNames(lapply(parts, function(p) colDef(align = "right", minWidth = 95)), parts)),
+              compact = TRUE, striped = TRUE, highlight = TRUE, pagination = FALSE, sortable = FALSE)
+  })
+  output$f_key_dl <- downloadHandler(
+    filename = function() paste0("profile_key_figures_", Sys.Date(), ".xlsx"),
+    content  = function(file) writexl::write_xlsx(as.data.frame(f_key()[, !c("figure", "type")]), file)
+  )
+
+  cost_parts <- c(compensation = "Compensation of employees", gos = "Gross operating surplus",
+                  other_taxes = "Other taxes on production", inputs_home = "Inputs from home industries",
+                  inputs_imported = "Imported inputs", taxes_other = "Taxes on products & other")
+  f_costs <- reactive({ s <- f_sel(); or_message(profile_costs(s$year, s$c, s$s)) })
+  f_costs_top <- reactive(head(f_costs(), f_sel()$top + (nrow(f_costs()) > 1)))   # the total and the largest
+  wire_card(output, "f_cost", f_costs,
+    cols = c(list(part = c("Country-industry", "text"), x = c("Output, EUR m", "eur")),
+             setNames(lapply(cost_parts, function(k) c(k, "pct")), names(cost_parts))),
+    plot = function() {
+      d <- f_costs_top()
+      long <- rbindlist(lapply(names(cost_parts), function(p) data.table(label = d$part, category = cost_parts[[p]], value = d[[p]])))
+      stacked_h(as.data.frame(long), x_title = "Share of output", colours = cost_colours, legend_rows = 2, caption = f_what())
+    },
+    height = function() bar_height(nrow(f_costs_top()), extra = 135),
+    file_stub = "profile_costs"
+  )
+
+  f_buyers <- reactive({ s <- f_sel(); or_message(profile_buyers(s$year, s$c, s$s, input$f_buy_level)) })
+  wire_card(output, "f_buy", f_buyers,
+    cols = function() if (input$f_buy_level == "buyer") {
+      list(buyer = c("Buyer", "text"), type = c("Buys as", "text"), share = c("Share of output", "pct"),
+           sales = c("Sales, EUR m", "eur1"))
+    } else {
+      list(buyer = c("Buyer country", "text"), share = c("Share of output", "pct"), industries = c("Industries, EUR m", "eur1"),
+           final = c("Final buyers, EUR m", "eur1"), sales = c("Sales, EUR m", "eur1"))
+    },
+    plot = function() {
+      d <- head(f_buyers(), f_sel()$top)
+      if (input$f_buy_level == "buyer") {
+        bars_h(d$buyer, d$share, x_title = "Share of output", highlight = d$type == names(buyer_colours)[1],
+               highlight_names = names(buyer_colours), highlight_colours = unname(buyer_colours), caption = f_what())
+      } else {
+        X <- sum(f_buyers()$sales)
+        long <- rbind(data.table(label = d$buyer, category = names(buyer_colours)[1], value = d$industries / X),
+                      data.table(label = d$buyer, category = names(buyer_colours)[2], value = d$final / X))
+        stacked_h(as.data.frame(long), x_title = "Share of output", colours = buyer_colours, caption = f_what())
+      }
+    },
+    height = function() bar_height(min(nrow(f_buyers()), f_sel()$top), extra = 120),
+    file_stub = "profile_buyers"
+  )
+
+  f_supp <- reactive({
+    s <- f_sel()
+    d <- or_message(profile_suppliers(s$year, s$c, s$s, input$f_sup_measure, input$f_sup_level))
+    d[, label := paste0(source_name, ifelse(home, " (home)", if (input$f_sup_level == "sector") " (abroad)" else ""))]
+    d[, where := ifelse(home, "Home", "Abroad")]
+    d
+  })
+  wire_card(output, "f_sup", f_supp,
+    cols = function() list(label = c("Source", "text"), where = c("Home or abroad", "text"),
+                           share = c(if (input$f_sup_measure == "direct") "Bought, % of output"
+                                     else "GVA per EUR of final demand for its products", "pct")),
+    plot = function() {
+      d <- head(f_supp(), f_sel()$top)
+      direct <- input$f_sup_measure == "direct"
+      tot <- f_supp()[, .(share = sum(share)), by = home]
+      bars_h(d$label, d$share, x_title = if (direct) "Bought, % of output" else "GVA per EUR of final demand for its products",
+             highlight = d$home, highlight_names = c("Home", "Abroad"), highlight_colours = home_colours,
+             caption = paste0(f_what(), " In all: home ", fmt_pct(sum(tot[home == TRUE, share])), ", abroad ",
+                              fmt_pct(sum(tot[home == FALSE, share])), if (direct) " of output." else " per EUR."))
+    },
+    height = function() bar_height(min(nrow(f_supp()), f_sel()$top), extra = 120),
+    file_stub = "profile_suppliers"
+  )
+
+  f_dest <- reactive({
+    s <- f_sel()
+    or_message(profile_rows(s$year, s$c, s$s))   # stops when the selection has no output
+    b <- or_message(va_by_buyer(s$c, s$s, s$year, origin_level = "country"))
+    o_va <- sum(unique(b[, .(origin, origin_va)])$origin_va)
+    home_name <- if (uniqueN(b$origin) == 1) paste(country_names[[b$origin[1]]], "(home)") else "Home (each one's own country)"
+    b[, who := ifelse(domestic, home_name, buyer_name)]
+    long <- b[, .(value = sum(va) / o_va), by = .(who, domestic, category)]
+    wide <- dcast(long, who + domestic ~ category, value.var = "value", fun.aggregate = sum)
+    cats <- intersect(unname(fd_categories), names(wide))
+    wide[, total := rowSums(.SD), .SDcols = cats]
+    wide <- wide[order(-domestic, -total)]
+    list(long = long, wide = wide, cats = cats)
+  })
+  wire_card(output, "f_dest", reactive(f_dest()$wide),
+    cols = function() c(list(who = c("Buyer country", "text")),
+                        setNames(lapply(f_dest()$cats, function(k) c(k, "pct")), f_dest()$cats),
+                        list(total = c("Total share", "pct"))),
+    plot = function() {
+      h <- f_dest()
+      rows <- head(h$wide$who, f_sel()$top)
+      d <- h$long[who %in% rows, .(label = factor(who, levels = rows), category, value)][order(label)]
+      stacked_h(as.data.frame(d), x_title = "Share of its GVA", caption = f_what())
+    },
+    height = function() bar_height(min(nrow(f_dest()$wide), f_sel()$top), extra = 135),
+    file_stub = "profile_va_destination"
+  )
+
+  # ---- Trade shock --------------------------------------------------------------------------------------------
+  observeEvent(input$t_unit, {
+    sgn <- if (isTRUE(input$t_size > 0)) 1 else -1
+    updateNumericInput(session, "t_size", value = sgn * if (input$t_unit == "pct") 10 else 1000)
+  }, ignoreInit = TRUE)
+  t_share   <- reactive({
+    s <- num_or(input$t_share, 100)
+    validate(need(s >= 0 && s <= 100, "The share made up must be between 0 and 100%."))
+    s
+  })
+  t_induced <- reactive(isTRUE(input$t_induced))
+  t_rate    <- reactive(if (t_induced()) spend_rate_or_stop(input$t_rate) else household_spend_rate)
+  t_impact  <- reactive({
+    need_sel(input$t_exp_c, input$t_exp_s, input$t_imp)
+    validate(need(is.numeric(input$t_size) && !is.na(input$t_size) && input$t_size != 0, "Give a size other than 0."))
+    size <- if (input$t_unit == "pct") list(pct = input$t_size) else list(eur_m = input$t_size)
+    share <- t_share(); rate <- t_rate()
+    or_message(do.call(trade_shock, c(list(year = as.integer(input$t_year), exporters = input$t_exp_c,
+                                           exporter_sectors = input$t_exp_s, importers = input$t_imp,
+                                           flows = input$t_flows, replace = input$t_replace,
+                                           replace_share = share / 100, induced = t_induced(), spend_rate = rate),
+                                      size)))
+  })
+  t_text <- reactive({
+    sh <- attr(t_impact(), "shock")
+    what <- c(all = "Exports", final = "Exports of final products", intermediate = "Exports of inputs")[[input$t_flows]]
+    size <- if (input$t_unit == "pct") sprintf("%+g%%", input$t_size) else sprintf("%+g EUR m", input$t_size)
+    rep  <- switch(input$t_replace, none = "No one makes up for the change.",
+                   importer = sprintf("Producers in the importing countries make up %g%% of it.", t_share()),
+                   others = sprintf("Producers in other countries make up %g%% of it.", t_share()))
+    txt <- paste0(what, " of ", describe(input$t_exp_c, input$t_exp_s), " to ", describe(input$t_imp), ": ", size,
+                  ", ", sh$year, ". ", rep)
+    if (t_induced()) paste(txt, induced_text(t_rate())) else txt
+  })
+  output$t_desc <- renderText(t_text())
+  t_world <- reactive(summarise_impact(t_impact(), "total"))
+  t_shown <- reactive({ need_sel(input$t_show); summarise_impact(t_impact(), "total", input$t_show) })
+  output$t_size_out  <- renderText(fmt_bn(attr(t_impact(), "shock")$size, 2))
+  output$t_size_note <- renderText(paste("these exports now:", fmt_bn(attr(t_impact(), "shock")$exports)))
+  output$t_made      <- renderText(if (input$t_replace == "none") "–" else fmt_bn(attr(t_impact(), "shock")$made_up, 2))
+  output$t_made_note <- renderText(if (input$t_replace == "none") "no one makes up for the change"
+                                   else "sales of producers of the same industries")
+  output$t_world     <- renderText(paste0(fmt_bn(t_world()$dva, 2), " (", fmt_pct(t_world()$share_va, 3), ")"))
+  output$t_shown     <- renderText(paste0(fmt_bn(t_shown()$dva, 2), " (", fmt_pct(t_shown()$share_va, 3), ")"))
+  output$t_world_note <- renderText(if (t_induced()) paste("of which household spending:", fmt_bn(t_world()$dva_induced, 2)) else "")
+  output$t_shown_note <- renderText(paste("of which through other countries' sales:", fmt_bn(t_shown()$dva_other, 2)))
+
+  channel_long <- function(labels, d, scale) {
+    parts <- c(dva_own = "Own country's sales", dva_other = "Other countries' sales", dva_induced = "Household spending")
+    long <- rbindlist(lapply(names(parts), function(k) data.table(label = labels, category = parts[[k]], value = d[[k]] / scale)))
+    used <- long[, .(used = any(value != 0)), by = category][used == TRUE, category]
+    long[category %in% used]
+  }
+  t_channel_cols <- function(name_key, name_label, own_share) {
+    cols <- c(setNames(list(c(name_label, "text")), name_key),
+              list(share_va = c(own_share, "pct"), dva = c("Change in GVA, EUR m", "eur1"),
+                   dva_own = c("Through own country's sales, EUR m", "eur1"),
+                   dva_other = c("Through other countries' sales, EUR m", "eur1"),
+                   dva_induced = c("Household spending, EUR m", "eur1"),
+                   dsales = c("Change in sales of its producers (the shock, or sales made up), EUR m", "eur1"),
+                   dva_direct = c("Direct, EUR m", "eur1"), dva_first = c("First-round suppliers, EUR m", "eur1"),
+                   dva_further = c("Further supply-chain rounds, EUR m", "eur1"), va = c("GVA, EUR m", "eur")))
+    if (!t_induced()) cols$dva_induced <- NULL
+    cols
+  }
+  t_countries <- reactive(summarise_impact(t_impact(), "country")[order(share_va)])
+  t_country_rows <- reactive({
+    d <- t_countries()
+    d <- if (input$t_country_scope == "shown") d[country %in% expand_countries(input$t_show)] else d[order(-abs(share_va))][1:min(.N, 20)]
+    d[order(-abs(share_va))]
+  })
+  wire_card(output, "t_country", t_countries,
+    cols = function() t_channel_cols("country_name", "Country", "Change, % of GVA"),
+    plot = function() {
+      d <- t_country_rows()
+      validate(need(nrow(d) > 0, "No countries to show."))
+      stacked_h(as.data.frame(channel_long(d$country_name, d, d$va)), x_title = "Change in GVA, % of the country's GVA",
+                colours = channel_colours, expand = c(0.02, 0.06), caption = t_text())
+    },
+    height = function() bar_height(nrow(t_country_rows()), extra = 120),
+    file_stub = "trade_shock_by_country"
+  )
+
+  output$t_cs_parts <- renderText({
+    t <- t_shown()
+    paste0("Change in GVA in the countries shown: ", eur_m1(t$dva), " = through own country's sales ", eur_m1(t$dva_own),
+           ", through other countries' sales ", eur_m1(t$dva_other),
+           if (t_induced()) paste0(", household spending ", eur_m1(t$dva_induced)), ".")
+  })
+  t_cs <- reactive({
+    need_sel(input$t_show)
+    summarise_impact(t_impact(), "country_sector", input$t_show, num_or(input$t_min_va, 0))[order(-abs(share_va))]
+  })
+  wire_card(output, "t_cs", t_cs,
+    cols = function() c(t_channel_cols("label", "Country-industry", "Change, % of own GVA"),
+                        list(share_country_va = c("Change, % of country's GVA", "pct"))),
+    plot = function() {
+      d <- head(t_cs(), num_or(input$t_top, top_n))
+      validate(need(nrow(d) > 0, "No country-industries above the GVA threshold."))
+      stacked_h(as.data.frame(channel_long(d$label, d, d$va)), x_title = "Change in GVA, % of own GVA",
+                colours = channel_colours, expand = c(0.02, 0.06))
+    },
+    height = function() bar_height(min(nrow(t_cs()), num_or(input$t_top, top_n)), extra = 135),
+    file_stub = "trade_shock_by_country_industry"
+  )
+
+  t_heat <- reactive({ need_sel(input$t_show); summarise_impact(t_impact(), "country_sector_group", input$t_show) })
+  t_heat_wide <- reactive({
+    w <- dcast(t_heat(), sector_group ~ country, value.var = "share_va")
+    w[match(unique(sectors$group), sector_group)][!is.na(sector_group)]
+  })
+  wire_card(output, "t_heat", t_heat_wide,
+    cols = function() c(list(sector_group = c("Industry group", "text")),
+                        setNames(lapply(expand_countries(input$t_show), function(k) c(k, "pct")),
+                                 expand_countries(input$t_show))),
+    plot = function() {
+      d <- t_heat()[, .(row = sector_group, col = country, value = share_va)]
+      heatmap_t(as.data.frame(d), unique(sectors$group), expand_countries(input$t_show), digits = 2,
+                caption = "Values in % of the group's GVA in each country.")
+    },
+    height = function() 420,
+    file_stub = "trade_shock_by_industry_group"
+  )
+
+  output$t_dl_all <- downloadHandler(
+    filename = function() paste0("trade_shock_results_", Sys.Date(), ".xlsx"),
+    content = function(file) {
+      cs_all <- summarise_impact(t_impact(), "country_sector")
+      writexl::write_xlsx(list(
+        shock               = data.frame(shock = t_text()),
+        by_country          = as.data.frame(t_countries()),
+        by_country_industry = as.data.frame(cs_all[, .(country, country_name, sector, sector_name, va, dva, dva_own, dva_other,
+                                                       dva_induced, dsales, dva_direct, dva_first, dva_further,
+                                                       share_va, share_country_va, in_source)]),
+        by_group_shown      = as.data.frame(t_heat())
+      ), file)
+    }
+  )
 }
 
 shinyApp(ui, server)

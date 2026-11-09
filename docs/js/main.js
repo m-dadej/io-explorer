@@ -8,7 +8,8 @@
 import { IOModel, parseCore, parseL, parseA, sum } from './engine.js';
 import { el, fmt, buildControls, valueBoxes, card, message, downloadXlsx, debounce } from './ui.js';
 import { barsH, stackedH, pairedH, heatmap, categoryColours, effectColours, contentColours, multiplierColours,
-         hhGreen, hhLabel, blue, priceColours, priceMeasures } from './charts.js';
+         hhGreen, hhLabel, blue, priceColours, priceMeasures, exportColours, channelColours, costColours,
+         buyerColours, homeColours } from './charts.js';
 
 let model, meta, D, year, base;
 const mainEl = document.getElementById('main');
@@ -16,7 +17,10 @@ const mainEl = document.getElementById('main');
 // ---- Errors are shown on the page (and not only in the console) ---------------------------------------
 const errorsEl = document.getElementById('errors');
 function showError(msg) { errorsEl.hidden = false; errorsEl.append(el('div', {}, msg)); }
-window.addEventListener('error', e => showError(`Error: ${e.message}`));
+window.addEventListener('error', e => {
+  if (/ResizeObserver loop/.test(e.message)) return;   // a harmless browser notice when charts redraw at a new size
+  showError(`Error: ${e.message}`);
+});
 window.addEventListener('unhandledrejection', e => showError(`Error: ${e.reason?.message ?? e.reason}`));
 
 // ---- Loading with a progress bar -------------------------------------------------------------------------
@@ -216,6 +220,243 @@ function buildDest() {
       });
     } catch (e) { [cTop, cExp, cHeat].forEach(c => c.message(e.message, true)); }
   }, 120);
+  return { update };
+}
+
+// ==== Value added in exports ====================================================================================
+function buildExva() {
+  const { side, content } = page('exva');
+  const ctl = buildControls(side, [
+    { key: 'c', type: 'multi', label: 'Exporters: countries', value: [D.focus], options: countryOpts },
+    { key: 's', type: 'multi', label: 'Exporters: industries', value: ['All sectors'], options: sectorOpts },
+    { key: 'imp', type: 'multi', label: 'Exports to', value: ['World'], options: countryOpts },
+    { key: 'top', type: 'number', label: 'Rows in the chart', value: 15, min: 5, max: 60, step: 5 },
+    { type: 'hint', html: 'Gross exports of the chosen country-industries and the value added in them: GVA of the exporting country itself (home), GVA of other countries in the inputs it imports, directly and through the supply chain (foreign), and taxes on products paid along the chain (other). This is the OECD TiVA measure of value added in gross exports. Sales within a country are not exports.' }
+  ], () => update());
+  const S = ctl.state;
+  const boxes = valueBoxes(content, [
+    { key: 'exports', title: 'Gross exports' },
+    { key: 'home', title: 'Home value added', note: 'share of the exports' },
+    { key: 'foreign', title: 'Foreign value added' },
+    { key: 'fwd', title: 'Their GVA in other countries’ exports' }]);
+  let rowsBy = 'country', srcLevel = 'country', fwdMetric = 'origin';
+  const cRows = card(content, { title: 'Value added in gross exports: home, foreign and other (% of exports)',
+    top: inlineRadio([['country', 'By exporting country'], ['sector', 'By exporting industry']], 'country', v => { rowsBy = v; update(); }),
+    note: 'Home GVA = value added of the exporting country itself (it can include a little that comes back home in imports). Foreign GVA = value added of other countries in the inputs, directly and through the supply chain. Taxes & other = taxes less subsidies on products paid on inputs along the chain. Largest rows by exports, most foreign first.' });
+  const cSrc = card(content, { title: 'Foreign value added in these exports, by source (% of the exports)',
+    top: inlineRadio([['country', 'Source countries'], ['country_sector', 'Source country-industries'], ['sector', 'Source industries']], 'country', v => { srcLevel = v; update(); }),
+    note: 'Value added of other countries in the exports, all exporters together. With several exporting countries, a country in the selection is a foreign source for the others (e.g. Polish GVA in Czech exports). Source industries add up all countries.' });
+  const cHeat = card(content, { title: 'Foreign value added by source country (% of the row’s exports)',
+    note: 'Rows as in the first chart (largest by exports). Columns: the 8 largest foreign sources.' });
+  const cFwd = card(content, { title: 'Their GVA in other countries’ exports, by exporting country',
+    top: inlineRadio([['origin', '% of their GVA'], ['exports', '% of that country’s exports']], 'origin', v => { fwdMetric = v; update(); }),
+    note: 'The other side of value chains: value added of the chosen country-industries that leaves in the exports of other countries (e.g. Polish parts in German car exports), directly or through their suppliers.' });
+  const cards = [cRows, cSrc, cHeat, cFwd];
+
+  const update = debounce(async () => {
+    try {
+      needSel(S.c, S.s, S.imp);
+      if (!model.L) cards.forEach(c => c.message('Loading the model data…'));
+      await ensure('L');
+      const args = { exporters: S.c, exporterSectors: S.s, importers: S.imp };
+      const top = topOf(S.top, 15), world = S.imp.length === 1 && S.imp[0] === 'World';
+      const exportsTo = world ? 'all exports' : `exports to ${model.describe(S.imp)}`;
+      const what = `${model.describe(S.c, S.s)}, ${exportsTo}, ${year}.`;
+      const eu = new Set(meta.country_groups.EU27);
+      const tot = model.exportContent({ ...args, by: 'total' })[0];
+      const srcC = model.exportSources({ ...args, sourceLevel: 'country' });
+      const fwd = model.vaInOthersExports({ originCountries: S.c, originSectors: S.s, importers: S.imp });
+      const fwdAll = sum(fwd.by_exporter.map(r => r.va));
+      boxes.set('exports', fmt.bn(tot.exports), world ? 'to all other countries' : `to ${model.describe(S.imp)}`);
+      boxes.set('home', fmt.pct(tot.home_share));
+      boxes.set('foreign', fmt.pct(tot.foreign_share), `share of the exports; of which from EU27 countries: ${fmt.pct(sum(srcC.filter(r => eu.has(r.source)).map(r => r.share)))}`);
+      boxes.set('fwd', fmt.pct(fwdAll / fwd.origin_va), `of their GVA; in their own country’s exports: ${fmt.pct(fwd.in_own_exports / fwd.origin_va)}`);
+
+      // -- Home, foreign and other, by exporting country or industry
+      const rowsAll = model.exportContent({ ...args, by: rowsBy });
+      const rowsTop = [...rowsAll].sort((a, b) => b.exports - a.exports).slice(0, top).sort((a, b) => b.foreign_share - a.foreign_share);
+      const parts = [['home_share', 'Home GVA'], ['foreign_share', 'Foreign GVA'], ['other_share', 'Taxes on products & other']];
+      cRows.set({
+        chart: w => stackedH(w, { rows: rowsTop.flatMap(r => parts.map(([k, name]) => ({ label: r.exporter_name, category: name, value: r[k] }))),
+                                  labels: rowsTop.map(r => r.exporter_name), colours: exportColours, xTitle: 'Share of gross exports', caption: what, whole: true }),
+        data: rowsAll, file: 'va_in_exports',
+        columns: [{ key: 'exporter_name', label: nameCol(rowsBy), type: 'text' }, { key: 'exports', label: 'Gross exports, EUR m', type: 'eur' },
+                  { key: 'home_share', label: 'Home GVA', type: 'pct' }, { key: 'foreign_share', label: 'Foreign GVA', type: 'pct' },
+                  { key: 'other_share', label: 'Taxes on products & other', type: 'pct' }, { key: 'va_home', label: 'Home GVA, EUR m', type: 'eur' },
+                  { key: 'va_foreign', label: 'Foreign GVA, EUR m', type: 'eur' }]
+      });
+
+      // -- Foreign GVA by source
+      const src = srcLevel === 'country' ? srcC : model.exportSources({ ...args, sourceLevel: srcLevel });
+      const sTop = src.slice(0, top);
+      cSrc.set({
+        chart: w => barsH(w, { rows: sTop, label: d => d.source_name, value: d => d.share, xTitle: 'Share of the gross exports',
+                               highlight: srcLevel !== 'sector' ? d => eu.has(d.source_country) : null, highlightNames: ['EU27', 'Outside the EU27'],
+                               caption: `${what} Foreign GVA in all: ${fmt.pct(tot.foreign_share)} of the exports.`,
+                               tip: d => `${d.source_name}\n${fmt.pct(d.share, 2)} of the exports\n${fmt.m(d.va, 1)}` }),
+        data: src, file: 'va_in_exports_sources',
+        columns: [{ key: 'source_name', label: 'Source', type: 'text' }, { key: 'share', label: 'Share of the exports', type: 'pct' },
+                  { key: 'va', label: 'GVA in the exports, EUR m', type: 'eur1' }]
+      });
+
+      // -- Heatmap: rows as in the first chart, the 8 largest foreign source countries
+      const srcCodes = srcC.slice(0, 8).map(r => r.source), colNames = srcCodes.map(c => model.shortCode(c));
+      const cell = new Map(model.exportSources({ ...args, by: rowsBy, sourceLevel: 'country' }).map(r => [`${r.exporter_name}|${r.source}`, r.share]));
+      const value = (r, k) => cell.get(`${r.exporter_name}|${srcCodes[k]}`) ?? 0;
+      cHeat.set({
+        chart: w => heatmap(w, { rows: rowsTop.flatMap(r => colNames.map((c, k) => ({ row: r.exporter_name, col: c, value: value(r, k) }))),
+                                 rowLevels: rowsTop.map(r => r.exporter_name), colLevels: colNames,
+                                 caption: `${what} Values in % of the row’s gross exports. RoW = rest of world.` }),
+        data: rowsTop.map(r => Object.fromEntries([['row', r.exporter_name], ...colNames.map((c, k) => [c, value(r, k)])])), file: 'va_in_exports_heatmap',
+        columns: [{ key: 'row', label: nameCol(rowsBy), type: 'text' }, ...colNames.map(c => ({ key: c, label: c, type: 'pct' }))]
+      });
+
+      // -- Their GVA in other countries' exports
+      const fw = fwd.by_exporter.map(r => ({ ...r, metric: fwdMetric === 'origin' ? r.share_origin_va : r.share_of_exports }))
+        .sort((a, b) => b.metric - a.metric);
+      if (!fw.length) cFwd.message('No value added in other countries’ exports.');
+      else cFwd.set({
+        chart: w => barsH(w, { rows: fw.slice(0, top), label: d => d.exporter_name, value: d => d.metric,
+                               xTitle: fwdMetric === 'origin' ? 'Share of their GVA' : 'Share of the exporting country’s gross exports',
+                               caption: `${model.describe(S.c, S.s)} in the ${world ? 'exports' : `exports to ${model.describe(S.imp)}`} of other countries, ${year}. In all: ${fmt.pct(fwdAll / fwd.origin_va)} of their GVA.`,
+                               tip: d => `${d.exporter_name}\n${fmt.m(d.va, 1)}\n${fmt.pct(d.share_origin_va, 2)} of their GVA\n${fmt.pct(d.share_of_exports, 2)} of its exports` }),
+        data: fw, file: 'va_in_other_countries_exports',
+        columns: [{ key: 'exporter_name', label: 'Exporting country', type: 'text' }, { key: 'va', label: 'Their GVA in its exports, EUR m', type: 'eur1' },
+                  { key: 'share_origin_va', label: '% of their GVA', type: 'pct' }, { key: 'share_of_exports', label: '% of its exports', type: 'pct' },
+                  { key: 'exports', label: 'Its gross exports, EUR m', type: 'eur' }]
+      });
+    } catch (e) { cards.forEach(c => c.message(e.message, true)); }
+  }, 150);
+  return { update };
+}
+
+// ==== Industry profile ==========================================================================================
+function buildProf() {
+  const { side, content } = page('prof');
+  const ctl = buildControls(side, [
+    { key: 'c', type: 'multi', label: 'Countries', value: [D.origin], options: countryOpts },
+    { key: 's', type: 'multi', label: 'Industries', value: ['C29'], options: sectorOpts },
+    { key: 'top', type: 'number', label: 'Rows in the chart', value: 15, min: 5, max: 60, step: 5 },
+    { type: 'hint', html: 'A profile of the chosen country-industries: what their output pays for, who buys it, where their inputs come from and where their value added ends up. Choose several countries to compare them in the key figures. Totals over several country-industries are weighted by output.' }
+  ], () => update());
+  const S = ctl.state;
+  const desc = el('div', { class: 'desc' });
+  content.append(desc);
+  const boxes = valueBoxes(content, [
+    { key: 'output', title: 'Output' }, { key: 'share', title: 'Share of the country’s GVA' },
+    { key: 'exports', title: 'Exports' }, { key: 'abroad', title: 'GVA that ends up abroad', note: 'in final demand of other countries' }]);
+  const cKey = card(content, { title: 'Key figures', tableOnly: true, pageSize: 50,
+    note: 'Energy = mining and quarrying, refined petroleum products, electricity and gas (energy_sectors in config.R; FIGARO’s mining also has ores and stone), in all countries. Direct and through suppliers = what the energy in all inputs costs, along the whole supply chain (the price model with full pass-through, see Notes). Upstreamness = average number of production steps before the output reaches final users.' });
+  const cCost = card(content, { title: 'What each EUR of output pays for',
+    note: 'Inputs from home industries and imported inputs: what it buys directly. Taxes on products & other: paid on its inputs. The rest is its GVA: compensation of employees, gross operating surplus and mixed income, and other net taxes on production.' });
+  let buyLevel = 'buyer', supMeasure = 'direct', supLevel = 'country_sector';
+  const cBuy = card(content, { title: 'Who buys the output (% of output)',
+    top: inlineRadio([['buyer', 'Single buyers'], ['country', 'Buyer countries']], 'buyer', v => { buyLevel = v; update(); }),
+    note: 'Industries buy it as an input; final buyers are households, government, investment (GFCF), NPISH and inventories of each country. Home = the producing country.' });
+  const cSup = card(content, { title: 'Where the inputs come from',
+    top: el('div', { class: 'card-switch-row' },
+      inlineRadio([['direct', 'Bought directly (% of output)'], ['chain', 'Value added along the whole supply chain']], 'direct', v => { supMeasure = v; update(); }),
+      inlineRadio([['country_sector', 'Country-industries'], ['country', 'Countries'], ['sector', 'Industries']], 'country_sector', v => { supLevel = v; update(); })),
+    note: 'Bought directly: its purchases from each supplier per EUR of its output. Value added along the whole supply chain: GVA of each source per EUR of final demand for its products, its own GVA and its suppliers’ suppliers included.' });
+  const cDest = card(content, { title: 'Where its value added ends up (% of its GVA)',
+    note: 'Final demand that absorbs its GVA, directly or through other countries’ exports (as in the tab Where VA ends up). Home first, then the largest foreign buyers.' });
+  const cards = [cKey, cCost, cBuy, cSup, cDest];
+
+  const update = debounce(async () => {
+    try {
+      needSel(S.c, S.s);
+      if (!model.L || !model.A) cards.forEach(c => c.message('Loading the model data…'));
+      await ensure('L', 'A');
+      const top = topOf(S.top, 15), what = `${model.describe(S.c, S.s)}, ${year}.`;
+      desc.textContent = what;
+      const figs = model.profileFigures(S.c, S.s);
+      const val = f => figs.find(r => r.part === 'Total' && r.figure === f).value;
+      boxes.set('output', fmt.bn(val('output')), `GVA ${fmt.bn(val('va'))}, ${fmt.pct(val('va_per_output'))} of output`);
+      boxes.set('share', fmt.pct(val('va_share_country'), 2), `of the GVA of ${model.describe(S.c)}`);
+      boxes.set('exports', fmt.pct(val('exports')), `of output; of which final products: ${fmt.pct(val('exports_final'))}`);
+      boxes.set('abroad', fmt.pct(val('va_abroad')));
+
+      // -- Key figures: one row per figure, one column per part
+      const parts = [...new Set(figs.map(r => r.part_name))];
+      const keyRows = [...new Set(figs.map(r => r.figure))].map(f => {
+        const rs = figs.filter(r => r.figure === f);
+        return Object.fromEntries([['label', rs[0].label], ['type', rs[0].type], ...rs.map(r => [r.part_name, r.value])]);
+      });
+      cKey.set({ data: keyRows, file: 'profile_key_figures',
+                 columns: [{ key: 'label', label: 'Figure', type: 'text' }, ...parts.map(p => ({ key: p, label: p, type: 'auto' }))] });
+
+      // -- Cost structure
+      const costParts = [['compensation', 'Compensation of employees'], ['gos', 'Gross operating surplus'], ['other_taxes', 'Other taxes on production'],
+                         ['inputs_home', 'Inputs from home industries'], ['inputs_imported', 'Imported inputs'], ['taxes_other', 'Taxes on products & other']];
+      const costs = model.profileCosts(S.c, S.s), cTop = costs.slice(0, top + (costs.length > 1 ? 1 : 0));
+      cCost.set({
+        chart: w => stackedH(w, { rows: cTop.flatMap(r => costParts.map(([k, name]) => ({ label: r.part, category: name, value: r[k] }))),
+                                  labels: cTop.map(r => r.part), colours: costColours, xTitle: 'Share of output', caption: what, whole: true }),
+        data: costs, file: 'profile_costs',
+        columns: [{ key: 'part', label: 'Country-industry', type: 'text' }, { key: 'x', label: 'Output, EUR m', type: 'eur' },
+                  ...costParts.map(([k, name]) => ({ key: k, label: name, type: 'pct' }))]
+      });
+
+      // -- Buyers
+      const buyers = model.profileBuyers(S.c, S.s, buyLevel), bTop = buyers.slice(0, top);
+      const X = sum(buyers.map(r => r.sales));
+      cBuy.set({
+        chart: w => buyLevel === 'buyer'
+          ? barsH(w, { rows: bTop, label: d => d.buyer, value: d => d.share, xTitle: 'Share of output', caption: what,
+                       highlight: d => d.type === buyerColours[0][0], highlightNames: buyerColours.map(c => c[0]), highlightColours: buyerColours.map(c => c[1]),
+                       tip: d => `${d.buyer}\n${d.type}\n${fmt.pct(d.share, 2)} of output\n${fmt.m(d.sales, 1)}` })
+          : stackedH(w, { rows: bTop.flatMap(r => [{ label: r.buyer, category: buyerColours[0][0], value: r.industries / X },
+                                                   { label: r.buyer, category: buyerColours[1][0], value: r.final / X }]),
+                          labels: bTop.map(r => r.buyer), colours: buyerColours, xTitle: 'Share of output', caption: what }),
+        data: buyers, file: 'profile_buyers',
+        columns: buyLevel === 'buyer'
+          ? [{ key: 'buyer', label: 'Buyer', type: 'text' }, { key: 'type', label: 'Buys as', type: 'text' },
+             { key: 'share', label: 'Share of output', type: 'pct' }, { key: 'sales', label: 'Sales, EUR m', type: 'eur1' }]
+          : [{ key: 'buyer', label: 'Buyer country', type: 'text' }, { key: 'share', label: 'Share of output', type: 'pct' },
+             { key: 'industries', label: 'Industries, EUR m', type: 'eur1' }, { key: 'final', label: 'Final buyers, EUR m', type: 'eur1' },
+             { key: 'sales', label: 'Sales, EUR m', type: 'eur1' }]
+      });
+
+      // -- Suppliers
+      const direct = supMeasure === 'direct';
+      const sup = model.profileSuppliers(S.c, S.s, supMeasure, supLevel)
+        .map(r => ({ ...r, label: `${r.source_name}${r.home ? ' (home)' : supLevel === 'sector' ? ' (abroad)' : ''}`, where: r.home ? 'Home' : 'Abroad' }));
+      const supTitle = direct ? 'Bought, % of output' : 'GVA per EUR of final demand for its products';
+      const homeTot = sum(sup.filter(r => r.home).map(r => r.share)), abroadTot = sum(sup.filter(r => !r.home).map(r => r.share));
+      cSup.set({
+        chart: w => barsH(w, { rows: sup.slice(0, top), label: d => d.label, value: d => d.share, xTitle: supTitle,
+                               highlight: d => d.home, highlightNames: ['Home', 'Abroad'], highlightColours: homeColours,
+                               caption: `${what} In all: home ${fmt.pct(homeTot)}, abroad ${fmt.pct(abroadTot)}${direct ? ' of output.' : ' per EUR.'}`,
+                               tip: d => `${d.label}\n${fmt.pct(d.share, 2)}` }),
+        data: sup, file: 'profile_suppliers',
+        columns: [{ key: 'label', label: 'Source', type: 'text' }, { key: 'where', label: 'Home or abroad', type: 'text' },
+                  { key: 'share', label: supTitle, type: 'pct' }]
+      });
+
+      // -- Where its value added ends up: home (each origin country's own), then foreign buyer countries
+      const b = model.vaByBuyer(S.c, S.s, 'country');
+      const oVA = sum([...new Map(b.map(r => [r.origin, r.origin_va])).values()]);
+      const origins = new Set(b.map(r => r.origin));
+      const homeName = origins.size === 1 ? `${model.countryNames[[...origins][0]]} (home)` : 'Home (each one’s own country)';
+      const byWho = new Map();
+      for (const r of b) {
+        const who = r.domestic ? homeName : r.buyer_name;
+        let g = byWho.get(who);
+        if (!g) { g = { who, domestic: r.domestic, total: 0 }; byWho.set(who, g); }
+        g[r.code] = (g[r.code] ?? 0) + r.va / oVA; g.total += r.va / oVA;
+      }
+      const dest = [...byWho.values()].sort((x, y) => (y.domestic - x.domestic) || (y.total - x.total));
+      const dTop = dest.slice(0, top), cats = catChoices.map(c => c[0]);
+      cDest.set({
+        chart: w => stackedH(w, { rows: dTop.flatMap(r => cats.map(k => ({ label: r.who, category: model.catLabels[k], value: r[k] ?? 0 }))),
+                                  labels: dTop.map(r => r.who), colours: cats.map(k => [model.catLabels[k], categoryColours[k]]),
+                                  xTitle: 'Share of its GVA', caption: what }),
+        data: dest, file: 'profile_va_destination',
+        columns: [{ key: 'who', label: 'Buyer country', type: 'text' }, ...cats.map(k => ({ key: k, label: model.catLabels[k], type: 'pct' })),
+                  { key: 'total', label: 'Total share', type: 'pct' }]
+      });
+    } catch (e) { desc.textContent = ''; cards.forEach(c => c.message(e.message, true)); }
+  }, 150);
   return { update };
 }
 
@@ -582,6 +823,151 @@ function buildSim() {
   };
 }
 
+// ==== Trade shock: a change in what exporters sell to importers ===================================================
+function buildTrade() {
+  const { side, content } = page('trade');
+  const ctl = buildControls(side, [
+    { key: 'exp_c', type: 'multi', label: 'Exporters: countries', value: ['EU27'], options: countryOpts },
+    { key: 'exp_s', type: 'multi', label: 'Exporters: industries', value: ['All sectors'], options: sectorOpts },
+    { key: 'imp', type: 'multi', label: 'Importers: countries', value: ['US'], options: countryOpts },
+    { key: 'flows', type: 'radio', label: 'Exports of', value: 'all',
+      choices: [['all', 'Everything (inputs and final products)'], ['final', 'Final products only'], ['intermediate', 'Inputs for industries only']] },
+    { key: 'unit', type: 'radio', label: 'Size given as', value: 'pct', inline: true, choices: [['pct', '% change'], ['eur', 'EUR million']] },
+    { key: 'size', type: 'number', label: 'Size', value: -10 },
+    { key: 'replace', type: 'radio', label: 'Who makes up for the change', value: 'none',
+      choices: [['none', 'No one'], ['importer', 'Producers in the importing country'], ['others', 'Producers in other countries']] },
+    { type: 'group', when: s => s.replace !== 'none', items: [
+      { key: 'share', type: 'number', label: 'Share they make up (%)', value: 100, min: 0, max: 100, step: 10 }] },
+    { key: 'induced', type: 'checkbox', label: 'Add household spending of extra wages', value: false },
+    { type: 'group', when: s => s.induced, items: [
+      { key: 'rate', type: 'number', label: 'Consumer spending per EUR of extra wages (EUR)', value: D.spend_rate, min: 0, max: 1, step: 0.05 }] },
+    { type: 'hr' },
+    { key: 'show', type: 'multi', label: 'Show results for', value: [D.focus], options: countryOpts },
+    { key: 'min_va', type: 'number', label: 'Leave out country-industries with GVA below (EUR m)', value: D.min_va, min: 0, step: 50 },
+    { key: 'top', type: 'number', label: 'Rows in the chart', value: D.top_n, min: 5, max: 60, step: 5 },
+    { type: 'hint', html: 'Exports of the exporters to the importers change, final products and inputs (e.g. a tariff that cuts EU exports to the US). Sales within a country never count. The exporters and their suppliers, at home and abroad, lose the sales. <b>Who makes up for the change:</b> no one (the gross effect), producers of the same industries in the importing country, or in other countries (in proportion to what they sell there now). The importers’ own production does not change.' }
+  ], key => {
+    if (key === 'unit') ctl.set.size((S.size > 0 ? 1 : -1) * (S.unit === 'pct' ? 10 : 1000));
+    if (['show', 'min_va', 'top'].includes(key)) render(); else compute();
+  });
+  const S = ctl.state;
+  const desc = el('div', { class: 'desc' });
+  content.append(desc);
+  const boxes = valueBoxes(content, [
+    { key: 'size', title: 'Change in exports' }, { key: 'made', title: 'Made up by other producers' },
+    { key: 'world', title: 'Change in world GVA' }, { key: 'shown', title: 'Change in GVA of the countries shown' }]);
+  let scope = 'shown';
+  const cCountry = card(content, { title: 'Change in GVA by country (% of the country’s GVA)',
+    top: inlineRadio([['shown', 'Countries shown'], ['world', '20 most affected worldwide']], 'shown', v => { scope = v; render(); }),
+    note: 'Own country’s sales = changes in sales of producers in the same country: its own exports, and the exports of its home customers. Other countries’ sales = it supplies producers abroad whose sales change (e.g. Polish parts in German cars exported to the US). Household spending = spending of the extra wages (when switched on).' });
+  const cCs = card(content, { title: 'Most affected country-industries (% of their own GVA)',
+    note: 'Split as in the chart above. The table also has the usual parts: direct (GVA on the sales change itself), first-round suppliers and further supply-chain rounds.' });
+  const cHeat = card(content, { title: 'Change in GVA by broad industry group (% of the group’s GVA)' });
+  const dlAll = el('button', { class: 'btn', disabled: true, onclick: () => downloadAll() }, 'Download all results (Excel)');
+  content.append(el('div', { class: 'dl-all' }, dlAll));
+  const cards = [cCountry, cCs, cHeat];
+  let imp = null, spec = null;
+
+  function shockText() {
+    const what = { all: 'Exports', final: 'Exports of final products', intermediate: 'Exports of inputs' }[spec.flows];
+    const size = spec.unit === 'pct' ? `${spec.size > 0 ? '+' : ''}${spec.size}%` : `${spec.size > 0 ? '+' : ''}${fmt.num(spec.size)} EUR m`;
+    const rep = { none: 'No one makes up for the change.', importer: `Producers in the importing countries make up ${spec.share}% of it.`,
+                  others: `Producers in other countries make up ${spec.share}% of it.` }[spec.replace];
+    const txt = `${what} of ${model.describe(spec.exp_c, spec.exp_s)} to ${model.describe(spec.imp)}: ${size}, ${year}. ${rep}`;
+    return spec.induced ? `${txt} ${induceText(spec.rate)}` : txt;
+  }
+  const compute = debounce(async () => {
+    try {
+      needSel(S.exp_c, S.exp_s, S.imp);
+      checkSize(S.size);
+      const share = Number.isFinite(S.share) ? S.share : 100;
+      if (!(share >= 0 && share <= 100)) throw new Error('The share made up must be between 0 and 100%.');
+      if (S.induced) checkSpendRate(S.rate);
+      if (!model.L || !model.A) cards.forEach(c => c.message('Loading the model data…'));
+      await ensure('L', 'A');
+      spec = { ...JSON.parse(JSON.stringify(S)), share };
+      imp = model.tradeShock({ exporters: spec.exp_c, exporterSectors: spec.exp_s, importers: spec.imp, flows: spec.flows,
+                               ...(spec.unit === 'pct' ? { pct: spec.size } : { eur: spec.size }), replace: spec.replace,
+                               replaceShare: share / 100, induced: spec.induced, spendRate: spec.induced ? spec.rate : D.spend_rate });
+      render();
+    } catch (e) { imp = null; dlAll.disabled = true; desc.textContent = ''; cards.forEach(c => c.message(e.message, true)); }
+  }, 250);
+
+  // Long rows for a chart split by channel (own country's sales, other countries' sales, household spending)
+  const channelRows = (items, labelOf, scaleOf) => {
+    const parts = [['dva_own', channelColours[0][0]], ['dva_other', channelColours[1][0]], ['dva_induced', channelColours[2][0]]];
+    const rows = items.flatMap(d => parts.map(([k, name]) => ({ label: labelOf(d), category: name, value: d[k] / scaleOf(d) })));
+    const used = new Set(rows.filter(r => r.value !== 0).map(r => r.category));
+    return rows.filter(r => used.has(r.category));
+  };
+  const channelCols = (nameKey, nameLabel, shareLabel) => [
+    { key: nameKey, label: nameLabel, type: 'text' }, { key: 'share_va', label: shareLabel, type: 'pct' },
+    { key: 'dva', label: 'Change in GVA, EUR m', type: 'eur1' }, { key: 'dva_own', label: 'Through own country’s sales, EUR m', type: 'eur1' },
+    { key: 'dva_other', label: 'Through other countries’ sales, EUR m', type: 'eur1' },
+    ...(imp.induced ? [{ key: 'dva_induced', label: 'Household spending, EUR m', type: 'eur1' }] : []),
+    { key: 'dsales', label: 'Change in sales of its producers (the shock, or sales made up), EUR m', type: 'eur1' },
+    { key: 'dva_direct', label: 'Direct, EUR m', type: 'eur1' }, { key: 'dva_first', label: 'First-round suppliers, EUR m', type: 'eur1' },
+    { key: 'dva_further', label: 'Further supply-chain rounds, EUR m', type: 'eur1' }, COLS.va];
+
+  function render() {
+    if (!imp) return;
+    try {
+      needSel(S.show);
+      desc.textContent = shockText();
+      const world = model.summariseImpact(imp, 'total')[0], shown = model.summariseImpact(imp, 'total', S.show)[0];
+      boxes.set('size', fmt.amount(imp.size), `these exports now: ${fmt.bn(imp.exports)}`);
+      if (spec.replace === 'none') boxes.set('made', '–', 'no one makes up for the change');
+      else boxes.set('made', fmt.amount(imp.madeUp), 'sales of producers of the same industries');
+      boxes.set('world', `${fmt.amount(world.dva)} (${fmt.pct(world.share_va, 3)})`, imp.induced ? `of which household spending: ${fmt.amount(world.dva_induced)}` : '');
+      boxes.set('shown', `${fmt.amount(shown.dva)} (${fmt.pct(shown.share_va, 3)})`, `of which through other countries’ sales: ${fmt.amount(shown.dva_other)}`);
+      const showSet = new Set(model.expandCountries(S.show));
+
+      const countries = model.summariseImpact(imp, 'country').sort((a, b) => a.share_va - b.share_va);
+      const shownC = (scope === 'shown' ? countries.filter(r => showSet.has(r.country))
+                                        : [...countries].sort((a, b) => Math.abs(b.share_va) - Math.abs(a.share_va)).slice(0, 20))
+        .sort((a, b) => Math.abs(b.share_va) - Math.abs(a.share_va));
+      if (!shownC.length) cCountry.message('No countries to show.');
+      else cCountry.set({
+        chart: w => stackedH(w, { rows: channelRows(shownC, d => d.country_name, d => d.va), labels: shownC.map(d => d.country_name),
+                                  colours: channelColours, xTitle: 'Change in GVA, % of the country’s GVA', caption: shockText() }),
+        data: countries, file: 'trade_shock_by_country', columns: channelCols('country_name', 'Country', 'Change, % of GVA')
+      });
+
+      const cs = model.summariseImpact(imp, 'country_sector', S.show, minVaOf(S.min_va)).sort((a, b) => Math.abs(b.share_va) - Math.abs(a.share_va));
+      const csTop = cs.slice(0, topOf(S.top, D.top_n));
+      cCs.setParts(`Change in GVA in the countries shown: ${fmt.m(shown.dva, 1)} = through own country’s sales ${fmt.m(shown.dva_own, 1)}, through other countries’ sales ${fmt.m(shown.dva_other, 1)}${imp.induced ? `, household spending ${fmt.m(shown.dva_induced, 1)}` : ''}.`);
+      if (!csTop.length) cCs.message('No country-industries above the GVA threshold.');
+      else cCs.set({
+        chart: w => stackedH(w, { rows: channelRows(csTop, d => d.label, d => d.va), labels: csTop.map(d => d.label), colours: channelColours,
+                                  xTitle: 'Change in GVA, % of own GVA' }),
+        data: cs, file: 'trade_shock_by_country_industry',
+        columns: [...channelCols('label', 'Country-industry', 'Change, % of own GVA'), { key: 'share_country_va', label: 'Change, % of country’s GVA', type: 'pct' }]
+      });
+
+      const heat = model.summariseImpact(imp, 'country_sector_group', S.show);
+      const codes = model.expandCountries(S.show);
+      cHeat.set({
+        chart: w => heatmap(w, { rows: heat.map(r => ({ row: r.sector_group, col: r.country, value: r.share_va })), rowLevels: meta.broad_groups,
+                                 colLevels: codes, digits: 2, caption: 'Values in % of the group’s GVA in each country.' }),
+        data: meta.broad_groups.map(g => Object.fromEntries([['sector_group', g], ...codes.map(c => [c, heat.find(r => r.sector_group === g && r.country === c)?.share_va])])),
+        file: 'trade_shock_by_industry_group',
+        columns: [{ key: 'sector_group', label: 'Industry group', type: 'text' }, ...codes.map(c => ({ key: c, label: c, type: 'pct' }))]
+      });
+      dlAll.disabled = false;
+    } catch (e) { cards.forEach(c => c.message(e.message, true)); }
+  }
+  async function downloadAll() {
+    const cols = keys => keys.map(k => ({ key: k, label: k }));
+    await downloadXlsx([{ name: 'shock', aoa: [['shock'], [shockText()]] },
+                        { name: 'by_country', rows: model.summariseImpact(imp, 'country'), cols: cols(['country', 'country_name', 'va', 'dva', 'dva_own', 'dva_other', 'dva_induced', 'dsales', 'dva_direct', 'dva_first', 'dva_further', 'share_va']) },
+                        { name: 'by_country_industry', rows: model.summariseImpact(imp, 'country_sector'), cols: cols(['country', 'country_name', 'sector', 'sector_name', 'va', 'dva', 'dva_own', 'dva_other', 'dva_induced', 'dsales', 'dva_direct', 'dva_first', 'dva_further', 'share_va', 'share_country_va', 'in_source']) },
+                        { name: 'by_group_shown', rows: model.summariseImpact(imp, 'country_sector_group', S.show), cols: cols(['country', 'sector_group', 'va', 'dva', 'dva_own', 'dva_other', 'share_va']) }],
+                       'trade_shock_results.xlsx');
+  }
+  let started = false;
+  return { update: () => { if (!started) { started = true; compute(); } } };
+}
+
 // ==== 4. Domestic shock ============================================================================================
 function buildDom() {
   const { side, content } = page('dom');
@@ -926,10 +1312,13 @@ function buildNotes() {
 // ==== Tabs and start-up ==========================================================================================
 const TABS = [
   { id: 'dest', title: 'Where VA ends up', build: buildDest },
+  { id: 'exva', title: 'VA in exports', build: buildExva },
+  { id: 'prof', title: 'Industry profile', build: buildProf },
   { id: 'expo', title: 'Exposure to a source', build: buildExpo },
   { id: 'src', title: 'Sources of an origin', build: buildSrc },
   { id: 'pairs', title: 'Top pairs', build: buildPairs },
   { id: 'sim', title: 'Shock simulator', build: buildSim },
+  { id: 'trade', title: 'Trade shock', build: buildTrade },
   { id: 'dom', title: 'Domestic shock', build: buildDom },
   { id: 'price', title: 'Price shock', build: buildPrice },
   { id: 'gov', title: 'Government', build: buildGov },

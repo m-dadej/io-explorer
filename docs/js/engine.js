@@ -14,7 +14,7 @@ export class IOModel {
     this.meta = meta;
     this.nc = meta.n_countries; this.ns = meta.n_sectors; this.n = this.nc * this.ns;
     this.nk = meta.fd_categories.length; this.nfd = this.nc * this.nk;
-    Object.assign(this, core);          // x, va, v, wage, Y, VAD, sales, LH, WLH, basic
+    Object.assign(this, core);          // x, va, v, wage, gos, Y, VAD, sales, LH, WLH, basic
     this.L = null; this.A = null;
     this.countryIndex = new Map(meta.countries.map((c, i) => [c.code, i]));
     this.sectorIndex = new Map(meta.sectors.map((s, i) => [s.code, i]));
@@ -315,11 +315,13 @@ export class IOModel {
       if (!g) {
         g = { i, va: 0, dva: 0, dva_excl_source: 0, dva_direct: 0, dva_first: 0, dva_further: 0,
               dva_induced: 0, dva_induced_excl_source: 0, in_source: true };
+        if (imp.own) Object.assign(g, { dsales: 0, dva_own: 0, dva_other: 0 });   // a trade shock
         groups.set(key, g);
       }
       g.va += this.va[i]; g.dva += imp.dva[i];
       g.dva_direct += imp.direct[i]; g.dva_first += imp.first[i]; g.dva_further += imp.further[i];
       g.dva_induced += imp.dvaInduced[i];
+      if (imp.own) { g.dsales += imp.dsales[i]; g.dva_own += imp.own[i]; g.dva_other += imp.other[i]; }
       if (!imp.inSource[i]) { g.dva_excl_source += imp.dva[i]; g.dva_induced_excl_source += imp.dvaInduced[i]; }
       g.in_source = g.in_source && imp.inSource[i] === 1;
     }
@@ -717,7 +719,395 @@ export class IOModel {
                dp: all / tot, dp_source: src / tot, dp_other: (all - src) / tot };
     });
   }
+
+  // ---- 7. Trade-flow shocks (like trade_shock() in R) -------------------------------------------------------
+  // Gross exports of each country-industry to each importer country (sales within a country count as 0).
+  // flows: all, final (to final buyers), intermediate (to industries). Returns {B: importer indexes, F} with
+  // F[i + col * n] = exports of i to importer B[col].
+  exportsTo(importers, flows = 'all') {
+    const { n, nk } = this;
+    const B = this.expandCountries(importers).map(c => this.countryIndex.get(c));
+    const F = new Float64Array(n * B.length);
+    B.forEach((b, col) => {
+      for (let i = 0; i < n; i++) {
+        if (this.cOf(i) === b) continue;
+        const all = this.sales[i + b * n];
+        let fin = 0;
+        if (flows !== 'all') for (let k = 0; k < nk; k++) fin += this.Y[i + (b * nk + k) * n];
+        F[i + col * n] = flows === 'all' ? all : flows === 'final' ? fin : all - fin;
+      }
+    });
+    return { B, F };
+  }
+
+  // A change in what the exporters sell to the importers. replace: none, importer (producers of the same
+  // industry in the importing country make up replaceShare of it), others (producers of the same industry in
+  // other countries, in proportion to what they sell to the importer now). Every producer's change in sales
+  // works like a change in final demand for its products. The impact also has dsales (the change in sales),
+  // own (GVA change from sales changes of producers in the same country) and other (from producers abroad).
+  tradeShock({ exporters, exporterSectors = ['All sectors'], importers, flows = 'all', pct = null, eur = null,
+               replace = 'none', replaceShare = 1, induced = false, spendRate = this.meta.defaults.spend_rate,
+               decompose = true }) {
+    this.requireL();
+    if ((pct === null) === (eur === null)) throw new Error('Give either pct or eur');
+    if (!(replaceShare >= 0 && replaceShare <= 1)) throw new Error('The share made up must be between 0 and 1');
+    const { n, ns, nc } = this;
+    const O = this.selectCS(exporters, exporterSectors), m = O.length;
+    const { B, F } = this.exportsTo(importers, flows), nb = B.length;
+    let total = 0, totalPos = 0, any = false;
+    for (const i of O) for (let b = 0; b < nb; b++) { const f = F[i + b * n]; total += f; totalPos += Math.max(f, 0); if (f !== 0) any = true; }
+    if (!any || (eur !== null && !(totalPos > 0))) throw new Error('The exporters sell nothing to the importers');
+    const dS = new Float64Array(m * nb);    // change in the exports of O[r] to B[b]: dS[r + b * m]
+    O.forEach((i, r) => {
+      for (let b = 0; b < nb; b++) {
+        const f = F[i + b * n];
+        dS[r + b * m] = pct !== null ? f * pct / 100 : eur * Math.max(f, 0) / totalPos;
+      }
+    });
+    const dy = new Float64Array(n);
+    O.forEach((i, r) => { for (let b = 0; b < nb; b++) dy[i] += dS[r + b * m]; });
+    let madeUp = 0;
+    if (replace !== 'none' && replaceShare > 0) {
+      const excluded = new Set(this.expandCountries(exporters).map(c => this.countryIndex.get(c)));
+      for (let b = 0; b < nb; b++) {
+        const need = new Float64Array(ns);
+        O.forEach((i, r) => { need[this.sOf(i)] -= replaceShare * dS[r + b * m]; });
+        for (let s = 0; s < ns; s++) {
+          if (!need[s]) continue;
+          if (replace === 'importer') { dy[B[b] * ns + s] += need[s]; madeUp += need[s]; continue; }
+          let tot = 0;
+          for (let c = 0; c < nc; c++) if (!excluded.has(c) && c !== B[b]) tot += Math.max(F[c * ns + s + b * n], 0);
+          if (!(tot > 0)) continue;   // nobody else sells this to the importer
+          for (let c = 0; c < nc; c++) {
+            if (excluded.has(c) || c === B[b]) continue;
+            const w = Math.max(F[c * ns + s + b * n], 0);
+            if (w) dy[c * ns + s] += need[s] * w / tot;
+          }
+          madeUp += need[s];
+        }
+      }
+    }
+    const dx = new Float64Array(n), own = new Float64Array(n), cols = [], vals = [];
+    for (let j = 0; j < n; j++) {
+      const d = dy[j];
+      if (!d) continue;
+      cols.push(j); vals.push(d);
+      this.addCol(this.L, j, d, dx);
+      const off = j * n, c0 = this.cOf(j) * ns;
+      for (let i = c0; i < c0 + ns; i++) own[i] += this.L[off + i] * d;
+    }
+    let direct = null, first = null;
+    if (decompose) { this.requireA(); direct = Float64Array.from(dy); first = this.aTimes(cols, vals); }
+    const ind = induced ? this.inducedOutput(dx, spendRate) : null;
+    const imp = this.newImpact(dx, O, sum(dS), 'trade', direct, first, ind, induced ? spendRate : null);
+    imp.dsales = dy;
+    imp.own = new Float64Array(n); imp.other = new Float64Array(n);
+    for (let i = 0; i < n; i++) { imp.own[i] = this.v[i] * own[i]; imp.other[i] = this.v[i] * (dx[i] - own[i]); }
+    Object.assign(imp, { exports: total, madeUp, flows, replace, replaceShare });
+    return imp;
+  }
+
+  // ---- 8. Value added in exports (like export_content(), export_sources(), va_in_others_exports() in R) -----
+  // Gross exports of each country-industry to the importers, all flows (negative ones, stock drawdowns, count as 0)
+  exportVector(importers) {
+    const n = this.n, e = new Float64Array(n);
+    for (const code of this.expandCountries(importers)) {
+      const b = this.countryIndex.get(code);
+      for (let i = 0; i < n; i++) if (this.cOf(i) !== b) e[i] += this.sales[i + b * n];
+    }
+    for (let i = 0; i < n; i++) if (e[i] < 0) e[i] = 0;
+    return e;
+  }
+  exportRows(exporters, exporterSectors, importers) {
+    this.requireL();
+    const e = this.exportVector(importers);
+    const R = this.selectCS(exporters, exporterSectors).filter(i => e[i] > 0);
+    if (!R.length) throw new Error('These exporters sell nothing to the importers');
+    return { R, e };
+  }
+  // Key and name of a country-industry grouped by total, country, sector or country_sector
+  groupKey(i, by) {
+    return by === 'total' ? 'Total' : by === 'country' ? this.countryOf(i) : by === 'sector' ? this.sectorOf(i)
+      : `${this.countryOf(i)}_${this.sectorOf(i)}`;
+  }
+  groupName(key, by) {
+    if (by === 'country') return this.countryNames[key];
+    if (by === 'sector') return this.sectorNames[key];
+    if (by === 'country_sector') { const k = key.indexOf('_'); return `${this.shortCode(key.slice(0, k))} ${this.sectorNames[key.slice(k + 1)]}`; }
+    return key;
+  }
+  // One row per exporter: gross exports, home GVA, foreign GVA and other in them, and their shares
+  exportContent({ exporters, exporterSectors = ['All sectors'], importers = ['World'], by = 'country' }) {
+    const { R, e } = this.exportRows(exporters, exporterSectors, importers);
+    const { n, ns } = this, groups = new Map();
+    for (const r of R) {
+      const key = this.groupKey(r, by), off = r * n, c0 = this.cOf(r) * ns;
+      let all = 0, home = 0;
+      for (let i = 0; i < n; i++) all += this.v[i] * this.L[off + i];
+      for (let i = c0; i < c0 + ns; i++) home += this.v[i] * this.L[off + i];
+      let g = groups.get(key);
+      if (!g) { g = { exporter: key, exporter_name: this.groupName(key, by), exports: 0, va_home: 0, va_foreign: 0 }; groups.set(key, g); }
+      g.exports += e[r]; g.va_home += home * e[r]; g.va_foreign += (all - home) * e[r];
+    }
+    return [...groups.values()].map(g => {
+      const other = g.exports - g.va_home - g.va_foreign;
+      return { ...g, other, home_share: g.va_home / g.exports, foreign_share: g.va_foreign / g.exports, other_share: other / g.exports };
+    }).sort((a, b) => b.foreign_share - a.foreign_share);
+  }
+  // Where the value added in the exports comes from: rows (exporter, source, home) with va and its share of the
+  // exporter's exports. by: total, country, sector; sourceLevel: country, country_sector, sector.
+  exportSources({ exporters, exporterSectors = ['All sectors'], importers = ['World'], by = 'total', sourceLevel = 'country',
+                  foreignOnly = true }) {
+    const { R, e } = this.exportRows(exporters, exporterSectors, importers);
+    const { n, ns, nc } = this;
+    const nsrc = sourceLevel === 'country' ? nc : sourceLevel === 'sector' ? ns : n;
+    const srcOf = Int32Array.from({ length: n }, (_, i) => sourceLevel === 'country' ? this.cOf(i) : sourceLevel === 'sector' ? this.sOf(i) : i);
+    const cOfAll = Int32Array.from({ length: n }, (_, i) => this.cOf(i));
+    const groups = new Map();
+    for (const r of R) {
+      const key = this.groupKey(r, by);
+      let g = groups.get(key);
+      if (!g) { g = { exports: 0, foreign: new Float64Array(nsrc), home: new Float64Array(nsrc) }; groups.set(key, g); }
+      const off = r * n, er = e[r], cr = cOfAll[r];
+      g.exports += er;
+      for (let i = 0; i < n; i++) {
+        const k = this.v[i] * this.L[off + i] * er;
+        if (!k) continue;
+        if (cOfAll[i] === cr) g.home[srcOf[i]] += k; else g.foreign[srcOf[i]] += k;
+      }
+    }
+    const srcCode = s => sourceLevel === 'country' ? this.countryCodes[s] : sourceLevel === 'sector' ? this.sectorCodes[s] : `${this.countryOf(s)}_${this.sectorOf(s)}`;
+    const srcName = s => sourceLevel === 'country' ? this.countryNames[this.countryCodes[s]] : sourceLevel === 'sector' ? this.sectorNames[this.sectorCodes[s]] : this.label(s);
+    const out = [];
+    for (const [key, g] of groups) {
+      const parts = foreignOnly ? [[false, g.foreign]] : [[false, g.foreign], [true, g.home]];
+      for (const [home, a] of parts) {
+        for (let s = 0; s < nsrc; s++) {
+          if (!a[s]) continue;
+          const row = { exporter: key, exporter_name: this.groupName(key, by), source: srcCode(s), source_name: srcName(s), home,
+                        va: a[s], share: a[s] / g.exports, exports: g.exports };
+          if (sourceLevel !== 'sector') row.source_country = sourceLevel === 'country' ? row.source : this.countryOf(s);
+          out.push(row);
+        }
+      }
+    }
+    return out.sort((a, b) => b.va - a.va);
+  }
+  // GVA of an origin in other countries' gross exports (to the importers), by exporting country
+  vaInOthersExports({ originCountries, originSectors = ['All sectors'], importers = ['World'] }) {
+    this.requireL();
+    const { n, nc } = this, e = this.exportVector(importers), O = this.selectCS(originCountries, originSectors);
+    const M = new Float64Array(O.length * nc);   // GVA of O[r] in the exports of country d: M[r * nc + d]
+    for (let j = 0; j < n; j++) {
+      const ej = e[j];
+      if (!ej) continue;
+      const d = this.cOf(j), off = j * n;
+      for (let r = 0; r < O.length; r++) { const i = O[r]; M[r * nc + d] += this.v[i] * this.L[off + i] * ej; }
+    }
+    const exports = new Float64Array(nc), byD = new Float64Array(nc);
+    for (let j = 0; j < n; j++) exports[this.cOf(j)] += e[j];
+    let own = 0, vaO = 0;
+    O.forEach((i, r) => {
+      vaO += this.va[i];
+      const ci = this.cOf(i);
+      for (let d = 0; d < nc; d++) { if (d === ci) own += M[r * nc + d]; else byD[d] += M[r * nc + d]; }
+    });
+    const rows = this.countryCodes.map((code, d) => ({ exporter: code, exporter_name: this.countryNames[code], exports: exports[d], va: byD[d],
+                                                       share_origin_va: byD[d] / vaO, share_of_exports: byD[d] / exports[d] }))
+      .filter(r => r.va !== 0).sort((a, b) => b.va - a.va);
+    return { by_exporter: rows, origin_va: vaO, in_own_exports: own };
+  }
+
+  // ---- 9. Profile of country-industries (like profile_figures() ... profile_suppliers() in R) -------------------
+  profileRows(countries, sectors) {
+    const P = this.selectCS(countries, sectors).filter(i => this.x[i] > 0);
+    if (!P.length) throw new Error('The selection has no output');
+    return P;
+  }
+  // Key figures: rows {part, part_name, figure, label, type, value}; parts: Total and, with several countries, each one
+  profileFigures(countries, sectors = ['All sectors']) {
+    this.requireL(); this.requireA();
+    const { n, ns, nc, nk, nfd } = this, P = this.profileRows(countries, sectors);
+    const { ptr, idx, val } = this.A;
+    const energyRows = this.selectCS(['World'], this.meta.energy_sectors), isEnergy = new Uint8Array(n);
+    energyRows.forEach(i => { isEnergy[i] = 1; });
+    const energy = this.priceShock({ sourceCountries: ['World'], sourceSectors: this.meta.energy_sectors, pct: 100 });
+    const gov = this.catCodes.indexOf('P3_S13');
+    const xPos = Float64Array.from(this.x, v => Math.max(v, 0));
+    const rows = P.map(j => {
+      const c = this.cOf(j), x = this.x[j], off = j * n, c0 = c * ns;
+      let imported = 0, energyDirect = 0;
+      for (let p = ptr[j]; p < ptr[j + 1]; p++) {
+        const i = idx[p];
+        if (this.cOf(i) !== c) imported += val[p];
+        if (isEnergy[i]) energyDirect += val[p];
+      }
+      let vlAll = 0, vlHome = 0, lHome = 0;
+      for (let i = 0; i < n; i++) vlAll += this.v[i] * this.L[off + i];
+      for (let i = c0; i < c0 + ns; i++) { vlHome += this.v[i] * this.L[off + i]; lHome += this.L[off + i]; }
+      let exports = 0, exportsFinal = 0;
+      for (let b = 0; b < nc; b++) {
+        if (b === c) continue;
+        exports += this.sales[j + b * n];
+        for (let k = 0; k < nk; k++) exportsFinal += this.Y[j + (b * nk + k) * n];
+      }
+      let vaAbroad = 0, vaGov = 0;
+      for (let q = 0; q < nfd; q++) {
+        const vad = this.VAD[j + q * n];
+        if (Math.floor(q / nk) !== c) vaAbroad += vad;
+        if (q % nk === gov) vaGov += vad;
+      }
+      let up = 0;
+      for (let k = 0; k < n; k++) up += this.L[j + k * n] * xPos[k];
+      return { c, x, va: this.va[j], wage: this.wage[j] * x, gos: this.gos[j] * x, exports, exportsFinal,
+               imported: imported * x, vaHomeChain: vlHome * x, vaForeignChain: (vlAll - vlHome) * x, outputMult: lHome * x,
+               vaAbroad, vaGov, energyDirect: energyDirect * x, energyTotal: energy.unit[j] * x, up };
+    });
+    const countryVA = new Float64Array(nc);
+    for (let i = 0; i < n; i++) countryVA[this.cOf(i)] += this.va[i];
+    const cs = [...new Set(rows.map(r => r.c))];
+    const parts = [['Total', rows], ...(cs.length > 1 ? cs.map(c => [this.countryCodes[c], rows.filter(r => r.c === c)]) : [])];
+    const out = [];
+    for (const [part, rs] of parts) {
+      const t = k => sum(rs.map(r => r[k]));
+      const X = t('x'), V = t('va'), G = t('gos'), E = t('energyTotal');
+      const vals = {
+        output: X, va: V, va_share_country: V / sum([...new Set(rs.map(r => r.c))].map(c => countryVA[c])),
+        va_per_output: V / X, wage_share: t('wage') / V, gos_output: G / X,
+        exports: t('exports') / X, exports_final: t('exportsFinal') / X, imported_inputs: t('imported') / X,
+        home_va_chain: t('vaHomeChain') / X, foreign_va_chain: t('vaForeignChain') / X, output_mult: t('outputMult') / X,
+        va_abroad: t('vaAbroad') / V, va_gov: t('vaGov') / V, energy_direct: t('energyDirect') / X, energy_total: E / X,
+        energy10_va: 0.1 * E / V, energy10_gos: G > 0 ? 0.1 * E / G : NaN, upstream: t('up') / X
+      };
+      for (const [figure, label, type] of PROFILE_LABELS) {
+        out.push({ part, part_name: part === 'Total' ? 'Total' : this.countryNames[part], figure, label, type, value: vals[figure] });
+      }
+    }
+    return out;
+  }
+  // What each EUR of output pays for: one row per country-industry (largest first), the total on top when there are several
+  profileCosts(countries, sectors = ['All sectors']) {
+    this.requireA();
+    const P = this.profileRows(countries, sectors), { ptr, idx, val } = this.A;
+    let rows = P.map(j => {
+      const c = this.cOf(j), x = this.x[j];
+      let home = 0, imported = 0;
+      for (let p = ptr[j]; p < ptr[j + 1]; p++) { if (this.cOf(idx[p]) === c) home += val[p]; else imported += val[p]; }
+      const comp = this.wage[j] * x, gos = this.gos[j] * x, va = this.va[j];
+      return { part: this.label(j), country: this.countryOf(j), sector: this.sectorOf(j), x, va, inputs_home: home * x,
+               inputs_imported: imported * x, taxes_other: x - (home + imported) * x - va, compensation: comp,
+               other_taxes: va - comp - gos, gos };
+    }).sort((a, b) => b.x - a.x);
+    const parts = ['inputs_home', 'inputs_imported', 'taxes_other', 'compensation', 'other_taxes', 'gos'];
+    if (rows.length > 1) {
+      const tot = { part: 'Total', country: null, sector: null };
+      for (const k of ['x', 'va', ...parts]) tot[k] = sum(rows.map(r => r[k]));
+      rows = [tot, ...rows];
+    }
+    return rows.map(r => ({ ...r, ...Object.fromEntries(parts.map(k => [k, r[k] / r.x])) }));
+  }
+  // Who buys the output, as a share of it. level: buyer (single buyers) or country (home first)
+  profileBuyers(countries, sectors = ['All sectors'], level = 'buyer') {
+    const { n, nc, nk, nfd } = this, P = this.profileRows(countries, sectors);
+    const X = sum(P.map(i => this.x[i]));
+    let out;
+    if (level === 'buyer') {
+      this.requireA();
+      const inP = new Uint8Array(n), { ptr, idx, val } = this.A;
+      P.forEach(i => { inP[i] = 1; });
+      out = [];
+      for (let k = 0; k < n; k++) {
+        let z = 0;
+        for (let p = ptr[k]; p < ptr[k + 1]; p++) if (inP[idx[p]]) z += val[p];
+        z *= this.x[k];
+        if (z) out.push({ buyer: this.label(k), country: this.countryOf(k), type: 'Industries (inputs)', sales: z });
+      }
+      for (let q = 0; q < nfd; q++) {
+        let y = 0;
+        for (const i of P) y += this.Y[i + q * n];
+        const b = this.countryCodes[Math.floor(q / nk)];
+        if (y) out.push({ buyer: `${this.shortCode(b)} ${this.catLabels[this.catCodes[q % nk]]}`, country: b, type: 'Final buyers', sales: y });
+      }
+      out.sort((a, b) => b.sales - a.sales);
+    } else {
+      const ind = new Float64Array(nc), fin = new Float64Array(nc);
+      let homeInd = 0, homeFin = 0;
+      for (const i of P) {
+        const c = this.cOf(i);
+        for (let b = 0; b < nc; b++) {
+          let f = 0;
+          for (let k = 0; k < nk; k++) f += this.Y[i + (b * nk + k) * n];
+          const s = this.sales[i + b * n] - f;
+          if (b === c) { homeInd += s; homeFin += f; } else { ind[b] += s; fin[b] += f; }
+        }
+      }
+      const cs = new Set(P.map(i => this.cOf(i)));
+      const homeName = cs.size === 1 ? `${this.countryNames[this.countryOf(P[0])]} (home)` : 'Home (each one’s own country)';
+      const rest = this.countryCodes.map((code, b) => ({ buyer: this.countryNames[code], country: code, industries: ind[b], final: fin[b], sales: ind[b] + fin[b] }))
+        .filter(r => r.sales !== 0).sort((a, b) => b.sales - a.sales);
+      out = [{ buyer: homeName, country: null, industries: homeInd, final: homeFin, sales: homeInd + homeFin }, ...rest];
+    }
+    return out.map(r => ({ ...r, share: r.sales / X }));
+  }
+  // Where the inputs come from. measure: direct (bought per EUR of output) or chain (GVA along the whole supply chain
+  // per EUR of final demand for its products). level: country_sector, country, sector. home = in the buyer's country.
+  profileSuppliers(countries, sectors = ['All sectors'], measure = 'direct', level = 'country_sector') {
+    const { n, nc, ns } = this, P = this.profileRows(countries, sectors);
+    const X = sum(P.map(i => this.x[i]));
+    const nsrc = level === 'country' ? nc : level === 'sector' ? ns : n;
+    const srcOf = i => level === 'country' ? this.cOf(i) : level === 'sector' ? this.sOf(i) : i;
+    const home = new Float64Array(nsrc), abroad = new Float64Array(nsrc);
+    if (measure === 'direct') {
+      this.requireA();
+      const { ptr, idx, val } = this.A;
+      for (const j of P) {
+        const w = this.x[j] / X, c = this.cOf(j);
+        for (let p = ptr[j]; p < ptr[j + 1]; p++) { const i = idx[p]; (this.cOf(i) === c ? home : abroad)[srcOf(i)] += val[p] * w; }
+      }
+    } else {
+      this.requireL();
+      for (const j of P) {
+        const w = this.x[j] / X, c = this.cOf(j), off = j * n;
+        for (let i = 0; i < n; i++) (this.cOf(i) === c ? home : abroad)[srcOf(i)] += this.v[i] * this.L[off + i] * w;
+      }
+    }
+    const out = [];
+    for (const [isHome, a] of [[true, home], [false, abroad]]) {
+      for (let s = 0; s < nsrc; s++) {
+        if (!a[s]) continue;
+        const source = level === 'country' ? this.countryCodes[s] : level === 'sector' ? this.sectorCodes[s] : `${this.countryOf(s)}_${this.sectorOf(s)}`;
+        const row = { source, home: isHome, share: a[s],
+                      source_name: level === 'country' ? this.countryNames[source] : level === 'sector' ? this.sectorNames[source] : this.label(s) };
+        if (level !== 'sector') row.source_country = level === 'country' ? source : this.countryOf(s);
+        out.push(row);
+      }
+    }
+    return out.sort((a, b) => b.share - a.share);
+  }
 }
+
+// The figures of the industry profile, in this order: name, label, format (as profile_labels in R/engine.R)
+export const PROFILE_LABELS = [
+  ['output', 'Output, EUR m', 'eur'],
+  ['va', 'Gross value added (GVA), EUR m', 'eur'],
+  ['va_share_country', 'Share of the country’s GVA', 'pct'],
+  ['va_per_output', 'GVA per EUR of output', 'pct'],
+  ['wage_share', 'Compensation of employees, % of GVA', 'pct'],
+  ['gos_output', 'Gross operating surplus and mixed income, % of output', 'pct'],
+  ['exports', 'Exports, % of output', 'pct'],
+  ['exports_final', 'Of which final products, % of output', 'pct'],
+  ['imported_inputs', 'Imported inputs, % of output (bought directly)', 'pct'],
+  ['home_va_chain', 'Home GVA per EUR of final demand for its products (whole supply chain)', 'pct'],
+  ['foreign_va_chain', 'Foreign GVA per EUR of final demand for its products (whole supply chain)', 'pct'],
+  ['output_mult', 'Home output per EUR of final demand for its products', 'dec'],
+  ['va_abroad', 'Its GVA that ends up in final demand abroad, % of GVA', 'pct'],
+  ['va_gov', 'Its GVA that depends on government consumption (home and abroad), % of GVA', 'pct'],
+  ['energy_direct', 'Energy bought directly, % of output', 'pct'],
+  ['energy_total', 'Energy cost, direct and through suppliers, % of output', 'pct'],
+  ['energy10_va', 'Energy prices +10% worldwide: extra cost, % of GVA', 'pct'],
+  ['energy10_gos', 'Energy prices +10% worldwide: extra cost, % of gross operating surplus', 'pct'],
+  ['upstream', 'Production steps to final users (upstreamness; 1 = sells only to final users)', 'dec']
+];
 
 // ---- Helpers -------------------------------------------------------------------------------------------
 export function sum(a) { let s = 0; for (const x of a) s += x; return s; }

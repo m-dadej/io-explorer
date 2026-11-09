@@ -31,6 +31,18 @@ effect_colours <- c("Direct" = "#1a4f9c", "First-round suppliers" = "#3a80d8",
 price_colours <- c("Direct purchases" = "#1a4f9c", "Through other suppliers" = "#7fb3ee")
 # Prices by country: output prices (grey) next to the household basket (blue)
 price_measures <- c("Output prices", "Household basket")
+# Value added in exports: home in blue, foreign in orange, taxes and other in grey
+export_colours <- c("Home GVA" = blue, "Foreign GVA" = "#eb6834", "Taxes on products & other" = rest)
+# Trade shock: the change in GVA through sales of the country's own producers or of producers abroad
+channel_colours <- c("Own country's sales" = "#1a4f9c", "Other countries' sales" = "#7fb3ee",
+                     "Household spending" = hh_green)
+# Industry profile: what each EUR of output pays for (GVA in blues, inputs in grey and orange)
+cost_colours <- c("Compensation of employees" = "#184f95", "Gross operating surplus" = "#3a80d8",
+                  "Other taxes on production" = "#a9cbf2", "Inputs from home industries" = "#8f8d86",
+                  "Imported inputs" = "#eb6834", "Taxes on products & other" = "#d9d7cf")
+# Industry profile: buyers (industries buying inputs, final buyers) and home vs foreign sources
+buyer_colours <- c("Industries (inputs)" = "#184f95", "Final buyers" = "#7fb3ee")
+home_colours  <- c(blue, "#eb6834")
 
 # Colours for up to 8 lines, always in this order
 series_colours <- c("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
@@ -60,10 +72,11 @@ pct_axis <- function(accuracy = NULL) scales::label_percent(accuracy = accuracy)
 bar_height <- function(n_bars, per_bar = 24, extra = 90) max(220, extra + per_bar * n_bars)
 
 # Horizontal bars, in the order given (first row on top).
-# `highlight` (TRUE/FALSE per bar) paints TRUE bars blue and the others grey;
+# `highlight` (TRUE/FALSE per bar) paints TRUE bars blue and the others grey (or `highlight_colours`);
 # `highlight_names` names the two groups in the legend.
 bars_h <- function(labels, values, x_title = NULL, percent = TRUE, highlight = NULL,
-                   highlight_names = c("Highlighted", "Other"), caption = NULL) {
+                   highlight_names = c("Highlighted", "Other"), caption = NULL,
+                   highlight_colours = c(blue, rest)) {
   d <- data.frame(label = factor(labels, levels = rev(unique(labels))), value = values)
   if (is.null(highlight)) {
     d$group <- "all"
@@ -71,7 +84,7 @@ bars_h <- function(labels, values, x_title = NULL, percent = TRUE, highlight = N
     show_legend <- FALSE
   } else {
     d$group <- factor(ifelse(highlight, highlight_names[1], highlight_names[2]), levels = highlight_names)
-    fills <- setNames(c(blue, rest), highlight_names)
+    fills <- setNames(highlight_colours, highlight_names)
     show_legend <- TRUE
   }
   ggplot(d, aes(value, label, fill = group)) +
