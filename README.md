@@ -1,6 +1,6 @@
 # IO Explorer
 
-Explore trade in value added between countries and industries, and test demand and production shocks. Data: Eurostat FIGARO inter-country input-output tables (industry by industry, 50 areas × 64 industries, 2010–2024, EUR million, current prices).
+Explore trade in value added between countries and industries, and test demand, production and price shocks. Data: Eurostat FIGARO inter-country input-output tables (industry by industry, 50 areas × 64 industries, 2010–2024, EUR million, current prices).
 
 It answers questions such as:
 - Where does Polish (Czech, CEE, …) value added end up? By buyer country and by type of final demand (households, government, investment, …), including indirect routes through other countries' exports.
@@ -9,6 +9,7 @@ It answers questions such as:
 - What happens to value added everywhere if German car production falls 10%, or US final demand falls 5%, or the German government spends EUR 10bn more?
 - How much of each country's value added depends on government consumption, at home and abroad?
 - A shock at home: if Polish government consumption rises EUR 1bn, or Polish construction output falls 10%, which Polish industries gain or lose, and how much leaks abroad? How much of each euro of home demand stays at home, by category and by industry?
+- A price shock: if prices of refined petroleum products rise 10% worldwide, how much do the output prices of Polish industries rise, through their own fuel bills and through their suppliers? What does it cost them, as a share of their GVA, and how much dearer is the household basket?
 
 ## How to run
 
@@ -59,6 +60,7 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 | Top pairs | The most exposed pairs of (origin country-industry, source country-industry) |
 | Shock simulator | Any final demand or production shock, in % or EUR. Results by country, country-industry and industry group, split into direct, first-round suppliers, further supply-chain rounds and household spending; Excel download |
 | Domestic shock | A shock to a country's own final demand or production. You see the effect on its own industries, the leakage abroad by country, and home GVA per EUR of shock. Three structural views need no shock: (1) which kind of home demand each industry depends on, (2) where EUR 1 of home demand ends up, by category and over time, and (3) home multipliers by industry |
+| Price shock | A rise in the output price of some producers (e.g. oil products in every country), passed on in full along the supply chain. You see the price change of every industry, split into its own direct purchases and what other suppliers pass on, the extra cost in EUR and as % of GVA, output prices and the household, government and investment baskets by country, and a heatmap by industry group; Excel download |
 | Government | GVA depending on government consumption at home and abroad, who benefits from a given government, a one-click scenario |
 | Notes | Definitions, formulas, caveats |
 
@@ -70,7 +72,8 @@ Every chart has a Table tab with the numbers and an Excel download.
   - *Production of a customer industry*: the supply-chain link. The share of GVA lost if the source stopped producing; it scales linearly, so a 10% cut means 10% of it. These shares are not additive across sources.
   - *Final demand for products*: the share of GVA that depends on final buyers of the source's products. These shares add up to 100% over all products.
 - **Government consumption excludes military equipment.** Equipment is investment (GFCF). For defence procurement scenarios use the simulator with "Investment (GFCF)" and the industry group "Defence-related manufacturing" from `config.R`.
-- **The model is linear and open.** There are no price effects and no substitution, and input structures are those of the chosen year. By default there is no household-income feedback, so the effects of demand shocks are a lower bound.
+- **The model is linear and open.** Demand and production shocks have no price effects and no substitution, and input structures are those of the chosen year. The Price shock tab is the price side of the same model: full pass-through of costs, no substitution, and no feedback to demand. By default there is no household-income feedback, so the effects of demand shocks are a lower bound.
+- **Price shocks are at basic prices**, before VAT and excise, so the household basket is not the CPI. For goods priced on world markets (oil products, gas, metals), raise the price in World, not in one country: otherwise imports keep their old price.
 - **Household spending of extra wages (option).** In the shock simulator and the Domestic shock tab, households can spend part of the extra wages a shock creates, round after round (a Type II, Keynesian consumption effect).
   - **The setting:** the spend rate per EUR of compensation of employees, default 0.45, set in `config.R` or in the sidebar.
   - **The effect:** Polish government consumption goes from EUR 0.85 to EUR 1.00 of home GVA per EUR.

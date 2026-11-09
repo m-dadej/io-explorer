@@ -105,6 +105,22 @@ check(isTRUE(all.equal(pf$dva, domestic_shock(yr, "PL", type = "production", sec
                                               induced = TRUE, decompose = FALSE)$dva)),
       "splitting into parts does not change the total")
 
+# Price shocks (the price model, p = p A + v)
+pq <- price_shock(yr, "World", "C19", pct = 10)
+check(max(abs(as.vector(crossprod(A, pq$dp)) - pq$dp)[!pq$in_source]) < 1e-12,
+      "price shock: every other price rises by its extra input cost per EUR")
+L <- load_L(yr); jq <- select_cs("PL", "D35")
+check(max(abs(price_shock(yr, "PL", "D35", pct = 10)$dp - 0.1 * L[jq, ] / L[jq, jq])) < 1e-12,
+      "one producer's price rise moves the others by shock x L[j, ] / L[j, j]")
+check(isTRUE(all.equal(price_shock(yr, "World", "C19", pct = 20)$dp, 2 * pq$dp)), "price shocks are linear")
+big <- price_shock(yr, setdiff(countries$code, "PL"), pct = 1)    # a large set uses the other formula
+Sq <- which(big$in_source); Rq <- which(!big$in_source)
+check(max(abs(big$dp[Rq] - as.vector(crossprod(L[Sq, Rq], solve(t(L[Sq, Sq]), rep(0.01, length(Sq))))))) < 1e-10,
+      "both price-shock formulas agree")
+yh <- pmax(core$Y[, fd$j[fd$buyer == "PL" & fd$code == "P3_S14"]], 0)
+check(abs(basket_prices(pq, "PL", "Households")$dp_source - 0.1 * sum(yh[pq$in_source]) / sum(yh)) < 1e-12,
+      "household basket: the producers' own products count with the full rise")
+
 # ---- Q1. Where does Polish GVA end up? ---------------------------------------------------------
 pl <- va_by_buyer("PL", years = yr)
 pl[, .(share = sum(share)), by = .(buyer_name, domestic)][order(-share)][1:10]
@@ -184,3 +200,16 @@ rbindlist(lapply(c(0, 0.3, 0.45, 0.6), function(r) {
 summarise_impact(fd_shock(yr, buyers = "DE", categories = "Government", eur_m = 10000, induced = TRUE),
                  "country", "CEE11")[order(-dva), .(country_name, gain_eur_m = round(dva, 1),
                                                     of_which_household_spending = round(dva_induced, 1))]
+
+# ---- Q12. Price shock: refined petroleum products +10% in every country --------------------------------
+# Price change of Polish industries' output with full pass-through (price) and from their own fuel
+# purchases alone (direct); extra cost as % of GVA = the squeeze on margins if they cannot pass it on
+petro <- price_shock(yr, "World", "C19", pct = 10)
+summarise_price(petro, "sector", "PL", min_va = min_va_eur_m)[1:10,
+  .(sector_name, price_pct = round(100 * dp, 2), direct_pct = round(100 * dp_direct, 2),
+    cost_eur_m = round(cost), cost_pct_of_gva = round(100 * cost_share_va, 1))]
+
+# CEE household baskets (basic prices): a world price rise vs Polish refineries only
+merge(basket_prices(petro, "CEE11", "Households")[, .(buyer_name, world = round(100 * dp, 2))],
+      basket_prices(price_shock(yr, "PL", "C19", pct = 10), "CEE11", "Households")[
+        , .(buyer_name, pl_refineries_only = round(100 * dp, 2))], by = "buyer_name")[order(-world)]

@@ -438,7 +438,58 @@ ui <- page_navbar(
     )
   ),
 
-  # ---- 7. Government consumption ---------------------------------------------------------------------------------
+  # ---- 7. Price shock: a price rise passed on along the supply chain ----------------------------------------------
+  nav_panel("Price shock", value = "price",
+    layout_sidebar(fillable = FALSE, border = FALSE,
+      sidebar = sidebar(width = 310,
+        pick_countries("q_c", "Producers: countries", "World"),
+        pick_sectors("q_s", "Producers: industries", "C19"),
+        numericInput("q_pct", "Rise in their output price (%)", 10, step = 1),
+        pick_year("q_year"),
+        hr(),
+        pick_countries("q_show", "Show results for", default_focus),
+        radioButtons("q_level", "Results by",
+                     c("Country-industry" = "country_sector", "Industry" = "sector",
+                       "Broad industry group" = "sector_group")),
+        pick_min_va("q_min_va"),
+        pick_top("q_top"),
+        hint("The output price of the chosen producers rises, and every buyer passes its extra costs on ",
+             "in full, along the supply chain, at home and abroad. Wages and margins per unit, volumes and ",
+             "the mix of inputs stay as they are, so the total is the upper end of the cost push; what each ",
+             "industry buys directly from the producers is the lower end. Basic prices: before VAT and excise.",
+             br(), strong("Commodities priced on world markets "), "(oil products, gas, metals): choose World ",
+             "as the producers' countries. A rise in one country only leaves imports at their old price.")
+      ),
+      div(class = "mb-2", strong(textOutput("q_desc"))),
+      layout_column_wrap(width = 1 / 4, fill = FALSE,
+        vbox("Price rise", "q_size", textOutput("q_size_note", inline = TRUE)),
+        vbox("Output prices in the countries shown", "q_dp", textOutput("q_dp_note", inline = TRUE)),
+        vbox("Extra cost in the countries shown", "q_cost", textOutput("q_cost_note", inline = TRUE)),
+        vbox("Household basket in the countries shown", "q_hh", textOutput("q_hh_note", inline = TRUE))
+      ),
+      chart_card("q_ind", "Most affected industries",
+                 radioButtons("q_metric", NULL, c("Price change" = "price", "Extra cost, % of GVA" = "squeeze",
+                                                  "Extra cost, EUR million" = "eur"), inline = TRUE),
+                 note = paste("Direct purchases = the extra cost of what the industry buys from the producers",
+                              "themselves: the cost push if no one else passed anything on (the lower end).",
+                              "Through other suppliers = what its other suppliers pass on. Together: full",
+                              "pass-through (the upper end). Extra cost is at today's volumes; as % of GVA it",
+                              "is the squeeze on margins if the industry cannot raise its own price. The",
+                              "producers whose price is set are left out.")),
+      chart_card("q_country", "Prices by country",
+                 radioButtons("q_country_scope", NULL,
+                              c("Countries shown" = "shown", "20 most affected worldwide" = "world"), inline = TRUE),
+                 note = paste("Output prices = all the country's industries, weighted by output (the producers",
+                              "whose price is set left out). Household basket = what the country's households",
+                              "buy, home-made and imported, at basic prices: the producers' own products bought",
+                              "directly count with the full rise. The table also has the government and",
+                              "investment baskets.")),
+      chart_card("q_heat", "Price change by broad industry group (% of the output price)"),
+      downloadButton("q_dl_all", "Download all results (Excel)", class = "btn-outline-secondary mb-4")
+    )
+  ),
+
+  # ---- 8. Government consumption ---------------------------------------------------------------------------------
   nav_panel("Government", value = "gov",
     layout_sidebar(fillable = FALSE, border = FALSE,
       sidebar = sidebar(width = 310,
@@ -470,7 +521,7 @@ ui <- page_navbar(
     )
   ),
 
-  # ---- 8. Notes ----------------------------------------------------------------------------------------------------
+  # ---- 9. Notes ----------------------------------------------------------------------------------------------------
   nav_panel("Notes", value = "notes",
     div(class = "container", style = "max-width: 860px", markdown(paste(readLines(file.path(root_dir, "app/notes.md"), encoding = "UTF-8"), collapse = "
 ")))
@@ -1083,7 +1134,143 @@ server <- function(input, output, session) {
     file_stub = "home_multipliers"
   )
 
-  # ---- 7. Government --------------------------------------------------------------------------------------------------
+  # ---- 7. Price shock ---------------------------------------------------------------------------------------------
+  pp <- function(x, digits = 2) ifelse(is.na(x), "-", sprintf(paste0("%+.", digits, "f"), 100 * x))   # +0.41
+  q_price <- reactive({
+    need_sel(input$q_c, input$q_s)
+    validate(need(is.numeric(input$q_pct) && !is.na(input$q_pct) && input$q_pct != 0,
+                  "Give a price change other than 0."))
+    tryCatch(price_shock(as.integer(input$q_year), input$q_c, input$q_s, pct = input$q_pct),
+             error = function(e) validate(need(FALSE, conditionMessage(e))))
+  })
+  q_show <- reactive({ need_sel(input$q_show); input$q_show })
+  q_text <- function() {
+    sh <- attr(q_price(), "shock")
+    paste0("Output price of ", describe(input$q_c, input$q_s), ": ", sprintf("%+g%%", sh$size), ", ", sh$year,
+           ". Every buyer passes its extra costs on in full.")
+  }
+  output$q_desc <- renderText(q_text())
+
+  q_total <- reactive({
+    t <- summarise_price(q_price(), "total", q_show())
+    validate(need(nrow(t) > 0 && isTRUE(t$x > 0),
+                  "All industries of the countries shown are among the producers whose price is set."))
+    t
+  })
+  q_baskets <- reactive(basket_prices(q_price(), "World"))   # households, government, investment, all countries
+  q_hh <- reactive({
+    b <- q_baskets()[code == "P3_S14" & buyer %in% expand_countries(q_show())]
+    list(dp = sum(b$dp * b$final_demand) / sum(b$final_demand),
+         source = sum(b$dp_source * b$final_demand) / sum(b$final_demand))
+  })
+  output$q_size      <- renderText(sprintf("%+g%%", attr(q_price(), "shock")$size))
+  output$q_size_note <- renderText({
+    sh <- attr(q_price(), "shock")
+    paste0("on ", fmt_bn(sh$source_output), " of output (", sh$n_source, " country-industries)")
+  })
+  output$q_dp        <- renderText(paste0(pp(q_total()$dp), "%"))
+  output$q_dp_note   <- renderText(paste0("weighted by output; of which direct purchases: ", pp(q_total()$dp_direct), " pp"))
+  output$q_cost      <- renderText(fmt_bn(q_total()$cost, 2))
+  output$q_cost_note <- renderText(paste(fmt_pct(q_total()$cost_share_va, 2), "of their GVA, at today's volumes"))
+  output$q_hh        <- renderText(paste0(pp(q_hh()$dp), "%"))
+  output$q_hh_note   <- renderText(paste0("basic prices; of which the producers' products bought directly: ",
+                                          pp(q_hh()$source), " pp"))
+
+  q_metric_title <- function() switch(input$q_metric, price = "Price change of output",
+                                      squeeze = "Extra cost, % of own GVA", eur = "Extra cost, EUR m")
+  q_ind <- reactive({
+    lvl <- input$q_level
+    s <- summarise_price(q_price(), lvl, q_show(), num_or(input$q_min_va, 0))
+    s[, name := switch(lvl, country_sector = label, sector = sector_name, sector_group = sector_group)]
+    s[, metric := switch(input$q_metric, price = dp, squeeze = cost_share_va, eur = cost)]
+    s[order(-abs(metric), na.last = TRUE)]
+  })
+  wire_card(output, "q_ind", q_ind,
+    cols = function() list(name = c(name_col(input$q_level), "text"), dp = c("Price change", "pct"),
+                           dp_direct = c("Of which direct purchases", "pct"),
+                           dp_indirect = c("Of which through other suppliers", "pct"),
+                           cost = c("Extra cost, EUR m", "eur1"), cost_share_va = c("Extra cost, % of GVA", "pct"),
+                           x = c("Output, EUR m", "eur"), va = c("GVA, EUR m", "eur")),
+    plot = function() {
+      d <- head(q_ind()[!is.na(metric)], num_or(input$q_top, top_n))
+      validate(need(nrow(d) > 0, "No industries above the GVA threshold."))
+      scale <- switch(input$q_metric, price = d$x, squeeze = d$va, eur = 1)
+      long <- rbind(data.table(label = d$name, category = "Direct purchases", value = d$cost_direct / scale),
+                    data.table(label = d$name, category = "Through other suppliers",
+                               value = (d$cost - d$cost_direct) / scale))
+      stacked_h(as.data.frame(long), x_title = q_metric_title(), colours = price_colours,
+                percent = input$q_metric != "eur", expand = c(0.02, 0.06),
+                caption = paste0(q_text(), " Results for: ", describe(q_show()), "."))
+    },
+    height = function() bar_height(min(nrow(q_ind()), num_or(input$q_top, top_n)), extra = 135),
+    file_stub = "price_shock_industries"
+  )
+
+  q_countries <- reactive({
+    s <- summarise_price(q_price(), "country")
+    b <- dcast(q_baskets(), buyer ~ code, value.var = "dp")
+    s[b, `:=`(hh = i.P3_S14, gov = i.P3_S13, inv = i.P51G), on = c(country = "buyer")]
+    s[q_baskets()[code == "P3_S14"], hh_source := i.dp_source, on = c(country = "buyer")]
+    s[order(-dp)]
+  })
+  wire_card(output, "q_country", q_countries,
+    cols = list(country_name = c("Country", "text"), dp = c("Output prices", "pct"),
+                dp_direct = c("Of which direct purchases", "pct"), cost = c("Extra cost, EUR m", "eur1"),
+                cost_share_va = c("Extra cost, % of GVA", "pct"), hh = c("Household basket", "pct"),
+                hh_source = c("Of which the producers' products, bought directly", "pct"),
+                gov = c("Government basket", "pct"), inv = c("Investment basket", "pct"), va = c("GVA, EUR m", "eur")),
+    plot = function() {
+      d <- q_countries()
+      d <- if (input$q_country_scope == "shown") d[country %in% expand_countries(q_show())] else d[1:min(.N, 20)]
+      validate(need(nrow(d) > 0, "No countries to show."))
+      long <- rbind(data.frame(label = d$country_name, measure = price_measures[1], value = d$dp),
+                    data.frame(label = d$country_name, measure = price_measures[2], value = d$hh))
+      paired_h(long, price_measures, x_title = "Price change", caption = q_text())
+    },
+    height = function() {
+      k <- if (input$q_country_scope == "shown") length(expand_countries(q_show())) else 20
+      bar_height(k, per_bar = 34)
+    },
+    file_stub = "price_shock_by_country"
+  )
+
+  q_heat <- reactive(summarise_price(q_price(), "country_sector_group", q_show()))
+  q_heat_wide <- reactive({
+    w <- dcast(q_heat(), sector_group ~ country, value.var = "dp")
+    w[match(unique(sectors$group), sector_group)][!is.na(sector_group)]
+  })
+  wire_card(output, "q_heat", q_heat_wide,
+    cols = function() {
+      cc <- intersect(expand_countries(q_show()), names(q_heat_wide()))
+      c(list(sector_group = c("Industry group", "text")), setNames(lapply(cc, function(k) c(k, "pct")), cc))
+    },
+    plot = function() {
+      d <- q_heat()[!is.na(dp), .(row = sector_group, col = country, value = dp)]
+      validate(need(nrow(d) > 0, "No industries outside the producers whose price is set."))
+      heatmap_t(as.data.frame(d), unique(sectors$group), intersect(expand_countries(q_show()), d$col), digits = 2,
+                caption = "Values in % of the output price, weighted by output (the producers whose price is set left out).")
+    },
+    height = function() 420,
+    file_stub = "price_shock_by_industry_group"
+  )
+
+  output$q_dl_all <- downloadHandler(
+    filename = function() paste0("price_shock_results_", Sys.Date(), ".xlsx"),
+    content = function(file) {
+      writexl::write_xlsx(list(
+        shock               = data.frame(shock = q_text()),
+        by_country          = as.data.frame(q_countries()[, .(country, country_name, x, va, dp, dp_direct, dp_indirect,
+                                                              cost, cost_direct, cost_share_va, hh, hh_source, gov, inv)]),
+        by_country_industry = as.data.frame(q_price()[, .(country, country_name, sector, sector_name, x, va, dp, dp_direct,
+                                                          dp_indirect, cost, cost_direct, cost_share_va, in_source)]),
+        baskets             = as.data.frame(q_baskets()[, .(buyer, buyer_name, code, category, final_demand, dp, dp_source,
+                                                            dp_other)]),
+        by_group_shown      = as.data.frame(q_heat()[, .(country, sector_group, x, va, dp, dp_direct, cost, cost_share_va)])
+      ), file)
+    }
+  )
+
+  # ---- 8. Government --------------------------------------------------------------------------------------------------
   g_shares <- reactive({
     need_sel(input$g_show)
     demand_shares(as.integer(input$g_year), input$g_show, "P3_S13")[order(-(share_domestic + share_foreign))]

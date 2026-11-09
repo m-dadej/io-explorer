@@ -8,7 +8,7 @@
 import { IOModel, parseCore, parseL, parseA, sum } from './engine.js';
 import { el, fmt, buildControls, valueBoxes, card, message, downloadXlsx, debounce } from './ui.js';
 import { barsH, stackedH, pairedH, heatmap, categoryColours, effectColours, contentColours, multiplierColours,
-         hhGreen, hhLabel, blue } from './charts.js';
+         hhGreen, hhLabel, blue, priceColours, priceMeasures } from './charts.js';
 
 let model, meta, D, year, base;
 const mainEl = document.getElementById('main');
@@ -757,6 +757,156 @@ function buildDom() {
   return { update };
 }
 
+// ==== 7. Price shock ===============================================================================================
+// A price rise of some producers, passed on in full along the supply chain (the price model)
+function buildPrice() {
+  const { side, content } = page('price');
+  const ctl = buildControls(side, [
+    { key: 'src_c', type: 'multi', label: 'Producers: countries', value: ['World'], options: countryOpts },
+    { key: 'src_s', type: 'multi', label: 'Producers: industries', value: ['C19'], options: sectorOpts },
+    { key: 'pct', type: 'number', label: 'Rise in their output price (%)', value: 10, step: 1 },
+    { type: 'hr' },
+    { key: 'show', type: 'multi', label: 'Show results for', value: [D.focus], options: countryOpts },
+    { key: 'level', type: 'radio', label: 'Results by', value: 'country_sector',
+      choices: [['country_sector', 'Country-industry'], ['sector', 'Industry'], ['sector_group', 'Broad industry group']] },
+    { key: 'min_va', type: 'number', label: 'Leave out country-industries with GVA below (EUR m)', value: D.min_va, min: 0, step: 50 },
+    { key: 'top', type: 'number', label: 'Rows in the chart', value: D.top_n, min: 5, max: 60, step: 5 },
+    { type: 'hint', html: 'The output price of the chosen producers rises, and every buyer passes its extra costs on in full, along the supply chain, at home and abroad. Wages and margins per unit, volumes and the mix of inputs stay as they are, so the total is the upper end of the cost push; what each industry buys directly from the producers is the lower end. Basic prices: before VAT and excise.<br><b>Commodities priced on world markets</b> (oil products, gas, metals): choose World as the producers’ countries. A rise in one country only leaves imports at their old price.' }
+  ], key => { if (['src_c', 'src_s', 'pct'].includes(key)) compute(); else render(); });
+  const S = ctl.state;
+  const desc = el('div', { class: 'desc' });
+  content.append(desc);
+  const boxes = valueBoxes(content, [
+    { key: 'size', title: 'Price rise' },
+    { key: 'dp', title: 'Output prices in the countries shown' },
+    { key: 'cost', title: 'Extra cost in the countries shown' },
+    { key: 'hh', title: 'Household basket in the countries shown' }]);
+  let metric = 'price', scope = 'shown';
+  const cInd = card(content, { title: 'Most affected industries',
+    top: inlineRadio([['price', 'Price change'], ['squeeze', 'Extra cost, % of GVA'], ['eur', 'Extra cost, EUR million']], 'price', v => { metric = v; render(); }),
+    note: 'Direct purchases = the extra cost of what the industry buys from the producers themselves: the cost push if no one else passed anything on (the lower end). Through other suppliers = what its other suppliers pass on. Together: full pass-through (the upper end). Extra cost is at today’s volumes; as % of GVA it is the squeeze on margins if the industry cannot raise its own price. The producers whose price is set are left out.' });
+  const cCountry = card(content, { title: 'Prices by country',
+    top: inlineRadio([['shown', 'Countries shown'], ['world', '20 most affected worldwide']], 'shown', v => { scope = v; render(); }),
+    note: 'Output prices = all the country’s industries, weighted by output (the producers whose price is set left out). Household basket = what the country’s households buy, home-made and imported, at basic prices: the producers’ own products bought directly count with the full rise. The table also has the government and investment baskets.' });
+  const cHeat = card(content, { title: 'Price change by broad industry group (% of the output price)' });
+  const dlAll = el('button', { class: 'btn', disabled: true, onclick: () => downloadAll() }, 'Download all results (Excel)');
+  content.append(el('div', { class: 'dl-all' }, dlAll));
+  const cards = [cInd, cCountry, cHeat];
+
+  const pp = (x, d = 2) => Number.isFinite(x) ? `${x >= 0 ? '+' : ''}${fmt.num(100 * x, d)}` : '–';   // +0.41
+  let pr = null, spec = null, baskets = [];
+  const sizeText = pct => `${pct > 0 ? '+' : ''}${pct}%`;
+  const shockText = () => `Output price of ${model.describe(spec.src_c, spec.src_s)}: ${sizeText(spec.pct)}, ${year}. Every buyer passes its extra costs on in full.`;
+
+  const compute = debounce(async () => {
+    try {
+      needSel(S.src_c, S.src_s);
+      if (!Number.isFinite(S.pct) || S.pct === 0) throw new Error('Give a price change other than 0.');
+      if (!model.L || !model.A) cards.forEach(c => c.message('Loading the model data…'));
+      await ensure('L', 'A');
+      spec = { src_c: [...S.src_c], src_s: [...S.src_s], pct: S.pct };
+      pr = model.priceShock({ sourceCountries: spec.src_c, sourceSectors: spec.src_s, pct: spec.pct });
+      baskets = model.basketPrices(pr, ['World']);
+      render();
+    } catch (e) { pr = null; dlAll.disabled = true; desc.textContent = ''; cards.forEach(c => c.message(e.message, true)); }
+  }, 250);
+
+  function countryRows() {
+    const b = new Map(baskets.map(r => [`${r.buyer}|${r.code}`, r]));
+    return model.summarisePrice(pr, 'country').map(r => ({ ...r,
+      hh: b.get(`${r.country}|P3_S14`)?.dp, hh_source: b.get(`${r.country}|P3_S14`)?.dp_source,
+      gov: b.get(`${r.country}|P3_S13`)?.dp, inv: b.get(`${r.country}|P51G`)?.dp }));
+  }
+  function render() {
+    if (!pr) return;
+    try {
+      needSel(S.show);
+      desc.textContent = shockText();
+      const total = model.summarisePrice(pr, 'total', S.show)[0];
+      if (!total) throw new Error('All industries of the countries shown are among the producers whose price is set.');
+      const showSet = new Set(model.expandCountries(S.show));
+      const hhRows = baskets.filter(r => r.code === 'P3_S14' && showSet.has(r.buyer));
+      const hhW = sum(hhRows.map(r => r.final_demand));
+      boxes.set('size', sizeText(pr.size), `on ${fmt.bn(pr.sourceOutput)} of output (${pr.nSource} country-industries)`);
+      boxes.set('dp', `${pp(total.dp)}%`, `weighted by output; of which direct purchases: ${pp(total.dp_direct)} pp`);
+      boxes.set('cost', fmt.bn(total.cost, 2), `${fmt.pct(total.cost_share_va, 2)} of their GVA, at today’s volumes`);
+      boxes.set('hh', `${pp(sum(hhRows.map(r => r.dp * r.final_demand)) / hhW)}%`,
+                `basic prices; of which the producers’ products bought directly: ${pp(sum(hhRows.map(r => r.dp_source * r.final_demand)) / hhW)} pp`);
+
+      // -- Most affected industries
+      const metricOf = { price: r => r.dp, squeeze: r => r.cost_share_va, eur: r => r.cost }[metric];
+      const scaleOf = { price: r => r.x, squeeze: r => r.va, eur: () => 1 }[metric];
+      const xTitle = { price: 'Price change of output', squeeze: 'Extra cost, % of own GVA', eur: 'Extra cost, EUR m' }[metric];
+      const ind = model.summarisePrice(pr, S.level, S.show, minVaOf(S.min_va))
+        .map(r => ({ ...r, name: { country_sector: r.label, sector: r.sector_name, sector_group: r.sector_group }[S.level] }))
+        .sort((a, b) => Math.abs(metricOf(b) || 0) - Math.abs(metricOf(a) || 0));
+      const top = ind.filter(r => Number.isFinite(metricOf(r))).slice(0, topOf(S.top, D.top_n));
+      if (!top.length) cInd.message('No industries above the GVA threshold.');
+      else cInd.set({
+        chart: w => stackedH(w, { rows: top.flatMap(r => [
+                                    { label: r.name, category: priceColours[0][0], value: r.cost_direct / scaleOf(r) },
+                                    { label: r.name, category: priceColours[1][0], value: (r.cost - r.cost_direct) / scaleOf(r) }]),
+                                  labels: top.map(r => r.name), colours: priceColours, percent: metric !== 'eur', xTitle,
+                                  caption: `${shockText()} Results for: ${model.describe(S.show)}.` }),
+        data: ind, file: 'price_shock_industries',
+        columns: [{ key: 'name', label: nameCol(S.level), type: 'text' }, { key: 'dp', label: 'Price change', type: 'pct' },
+                  { key: 'dp_direct', label: 'Of which direct purchases', type: 'pct' },
+                  { key: 'dp_indirect', label: 'Of which through other suppliers', type: 'pct' },
+                  { key: 'cost', label: 'Extra cost, EUR m', type: 'eur1' }, { key: 'cost_share_va', label: 'Extra cost, % of GVA', type: 'pct' },
+                  { key: 'x', label: 'Output, EUR m', type: 'eur' }, COLS.va]
+      });
+
+      // -- Prices by country
+      const countries = countryRows();
+      const shownC = scope === 'shown' ? countries.filter(r => showSet.has(r.country)) : countries.slice(0, 20);
+      if (!shownC.length) cCountry.message('No countries to show.');
+      else cCountry.set({
+        chart: w => pairedH(w, { rows: shownC.flatMap(r => [{ label: r.country_name, measure: priceMeasures[0], value: r.dp },
+                                                              { label: r.country_name, measure: priceMeasures[1], value: r.hh }]),
+                                 measures: priceMeasures, labels: shownC.map(r => r.country_name), xTitle: 'Price change', caption: shockText() }),
+        data: countries, file: 'price_shock_by_country',
+        columns: [COLS.country, { key: 'dp', label: 'Output prices', type: 'pct' }, { key: 'dp_direct', label: 'Of which direct purchases', type: 'pct' },
+                  { key: 'cost', label: 'Extra cost, EUR m', type: 'eur1' }, { key: 'cost_share_va', label: 'Extra cost, % of GVA', type: 'pct' },
+                  { key: 'hh', label: 'Household basket', type: 'pct' }, { key: 'hh_source', label: 'Of which the producers’ products, bought directly', type: 'pct' },
+                  { key: 'gov', label: 'Government basket', type: 'pct' }, { key: 'inv', label: 'Investment basket', type: 'pct' }, COLS.va]
+      });
+
+      // -- By broad industry group
+      const heat = model.summarisePrice(pr, 'country_sector_group', S.show);
+      const codes = model.expandCountries(S.show).filter(c => heat.some(r => r.country === c));
+      const long = heat.map(r => ({ row: r.sector_group, col: r.country, value: r.dp }));
+      const wide = meta.broad_groups.map(g => Object.fromEntries([['sector_group', g], ...codes.map(c => [c, heat.find(r => r.sector_group === g && r.country === c)?.dp])]));
+      cHeat.set({
+        chart: w => heatmap(w, { rows: long, rowLevels: meta.broad_groups, colLevels: codes, digits: 2,
+                                 caption: 'Values in % of the output price, weighted by output (the producers whose price is set left out).' }),
+        data: wide, file: 'price_shock_by_industry_group',
+        columns: [{ key: 'sector_group', label: 'Industry group', type: 'text' }, ...codes.map(c => ({ key: c, label: c, type: 'pct' }))]
+      });
+      dlAll.disabled = false;
+    } catch (e) { cards.forEach(c => c.message(e.message, true)); }
+  }
+  async function downloadAll() {
+    const cols = keys => keys.map(k => ({ key: k, label: k }));
+    const cs = [];
+    for (let i = 0; i < model.n; i++) {
+      const x = Math.max(model.x[i], 0), unit = pr.unit[i], direct = pr.direct[i];
+      cs.push({ country: model.countryOf(i), country_name: model.countryNames[model.countryOf(i)], sector: model.sectorOf(i),
+                sector_name: model.sectorNames[model.sectorOf(i)], x, va: model.va[i], dp: pr.dp[i], dp_direct: direct,
+                dp_indirect: unit - direct, cost: unit * x, cost_direct: direct * x, cost_share_va: unit * x / model.va[i],
+                in_source: pr.inSource[i] === 1 });
+    }
+    const g = model.summarisePrice(pr, 'country_sector_group', S.show);
+    await downloadXlsx([{ name: 'shock', aoa: [['shock'], [shockText()]] },
+                        { name: 'by_country', rows: countryRows(), cols: cols(['country', 'country_name', 'x', 'va', 'dp', 'dp_direct', 'dp_indirect', 'cost', 'cost_direct', 'cost_share_va', 'hh', 'hh_source', 'gov', 'inv']) },
+                        { name: 'by_country_industry', rows: cs, cols: cols(['country', 'country_name', 'sector', 'sector_name', 'x', 'va', 'dp', 'dp_direct', 'dp_indirect', 'cost', 'cost_direct', 'cost_share_va', 'in_source']) },
+                        { name: 'baskets', rows: baskets, cols: cols(['buyer', 'buyer_name', 'code', 'category', 'final_demand', 'dp', 'dp_source', 'dp_other']) },
+                        { name: 'by_group_shown', rows: g, cols: cols(['country', 'sector_group', 'x', 'va', 'dp', 'dp_direct', 'cost', 'cost_share_va']) }],
+                       'price_shock_results.xlsx');
+  }
+  let started = false;
+  return { update: () => { if (!started) { started = true; compute(); } } };
+}
+
 // ==== Notes ======================================================================================================
 function buildNotes() {
   const { content } = page('notes', false);
@@ -781,6 +931,7 @@ const TABS = [
   { id: 'pairs', title: 'Top pairs', build: buildPairs },
   { id: 'sim', title: 'Shock simulator', build: buildSim },
   { id: 'dom', title: 'Domestic shock', build: buildDom },
+  { id: 'price', title: 'Price shock', build: buildPrice },
   { id: 'gov', title: 'Government', build: buildGov },
   { id: 'notes', title: 'Notes', build: buildNotes }
 ];

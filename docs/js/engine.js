@@ -601,6 +601,122 @@ export class IOModel {
     }
     return out;
   }
+
+  // ---- 6. Price shocks (cost push) ------------------------------------------------------------------------
+  // Like price_shock() in R. The price model p = p A + v: the output price of the source country-industries
+  // S rises by pct % (set from outside); every buyer passes its extra input costs on in full, along the whole
+  // supply chain. dp_R = dp_S L[S,S]^-1 L[S,R]. Per country-industry:
+  //   dp        price change of its output (in S: the shock itself)
+  //   direct    extra cost of what it buys directly from S, per EUR of output (the lower end)
+  //   unit      extra input cost per EUR of output (outside S it equals dp); indirect = unit - direct
+  priceShock({ sourceCountries, sourceSectors = ['All sectors'], pct = 10 }) {
+    if (!Number.isFinite(pct) || pct === 0) throw new Error('Give a price change other than 0.');
+    this.requireA();
+    const n = this.n, d = pct / 100;
+    const S = this.selectCS(sourceCountries, sourceSectors).filter(i => this.x[i] > 0);
+    if (!S.length) throw new Error('The source has no output');
+    const inS = new Uint8Array(n);
+    S.forEach(i => { inS[i] = 1; });
+    const dp = new Float64Array(n), { ptr, idx, val } = this.A;
+    if (S.length <= SMALL_SOURCE) {
+      // w = (L[S,S]')^-1 dS, then dp_R = L[S,R]' w
+      this.requireL();
+      const m = S.length, M = new Float64Array(m * m);
+      for (let a = 0; a < m; a++) for (let b = 0; b < m; b++) M[a * m + b] = this.L[S[b] + S[a] * n];
+      const w = solveDense(M, m, new Float64Array(m).fill(d));
+      for (let j = 0; j < n; j++) {
+        if (inS[j]) continue;
+        const off = j * n;
+        let s = 0;
+        for (let b = 0; b < m; b++) s += this.L[off + S[b]] * w[b];
+        dp[j] = s;
+      }
+    } else {
+      // Large S: p_R = p_S A[S,R] + p_R A[R,R], solved by iteration (converges: A has column sums below 1)
+      const b0 = new Float64Array(n);
+      for (let j = 0; j < n; j++) {
+        if (inS[j]) continue;
+        for (let p = ptr[j]; p < ptr[j + 1]; p++) if (inS[idx[p]]) b0[j] += val[p] * d;
+      }
+      let x = Float64Array.from(b0);
+      for (let it = 0; it < 1000; it++) {
+        const y = Float64Array.from(b0);
+        let diff = 0, scale = 0;
+        for (let j = 0; j < n; j++) {
+          if (inS[j]) continue;
+          for (let p = ptr[j]; p < ptr[j + 1]; p++) { const k = idx[p]; if (!inS[k]) y[j] += val[p] * x[k]; }
+          diff = Math.max(diff, Math.abs(y[j] - x[j])); scale = Math.max(scale, Math.abs(y[j]));
+        }
+        x = y;
+        if (diff <= 1e-11 * (1 + scale)) break;
+      }
+      dp.set(x);
+    }
+    S.forEach(i => { dp[i] = d; });
+    // Extra input cost per EUR of output, and the part bought directly from S
+    const unit = new Float64Array(n), direct = new Float64Array(n);
+    for (let j = 0; j < n; j++) {
+      for (let p = ptr[j]; p < ptr[j + 1]; p++) {
+        const k = idx[p];
+        unit[j] += val[p] * dp[k];
+        if (inS[k]) direct[j] += val[p] * d;
+      }
+    }
+    return { what: 'price', size: pct, nSource: S.length, sourceOutput: sum(S.map(i => this.x[i])),
+             dp, unit, direct, inSource: inS };
+  }
+
+  // Totals of a price shock (like summarise_price() in R). The producers whose price is set are left out;
+  // prices are averaged with output weights. Sorted by price change, largest first.
+  summarisePrice(pr, level = 'country', countries = ['World'], minVA = 0) {
+    const keep = new Set(this.expandCountries(countries).map(c => this.countryIndex.get(c)));
+    const keyOf = {
+      country: i => this.cOf(i), country_sector: i => i, sector: i => this.sOf(i),
+      sector_group: i => this.sectorGroupOf[this.sOf(i)],
+      country_sector_group: i => `${this.cOf(i)}|${this.sectorGroupOf[this.sOf(i)]}`, total: () => 'total'
+    }[level];
+    const groups = new Map();
+    for (let i = 0; i < this.n; i++) {
+      if (!keep.has(this.cOf(i)) || pr.inSource[i]) continue;
+      const key = keyOf(i), x = Math.max(this.x[i], 0);
+      let g = groups.get(key);
+      if (!g) { g = { i, x: 0, va: 0, cost: 0, cost_direct: 0 }; groups.set(key, g); }
+      g.x += x; g.va += this.va[i]; g.cost += pr.unit[i] * x; g.cost_direct += pr.direct[i] * x;
+    }
+    const byCountry = ['country', 'country_sector', 'country_sector_group'].includes(level);
+    const bySector = ['country_sector', 'sector'].includes(level);
+    let out = [...groups.values()].map(g => {
+      const row = { x: g.x, va: g.va, cost: g.cost, cost_direct: g.cost_direct,
+                    dp: g.x > 0 ? g.cost / g.x : NaN, dp_direct: g.x > 0 ? g.cost_direct / g.x : NaN };
+      row.dp_indirect = row.dp - row.dp_direct;
+      row.cost_share_va = g.cost / g.va;
+      if (byCountry) { row.country = this.countryOf(g.i); row.country_name = this.countryNames[row.country]; }
+      if (bySector) { row.sector = this.sectorOf(g.i); row.sector_name = this.sectorNames[row.sector]; }
+      if (level === 'sector_group' || level === 'country_sector_group') row.sector_group = this.sectorGroupOf[this.sOf(g.i)];
+      if (level === 'country_sector') row.label = this.label(g.i);
+      return row;
+    });
+    if (level !== 'country' && level !== 'total') out = out.filter(r => r.va >= minVA);
+    return out.sort((a, b) => (Number.isFinite(b.dp) ? b.dp : -Infinity) - (Number.isFinite(a.dp) ? a.dp : -Infinity));
+  }
+
+  // Price change of what final buyers buy, by buyer country and category, at basic prices (like
+  // basket_prices() in R): dp, of which dp_source (products of the shocked producers bought directly), dp_other.
+  basketPrices(pr, buyers = ['World'], categories = ['P3_S14', 'P3_S13', 'P51G']) {
+    const n = this.n;
+    return this.selectFD(buyers, categories).map(j => {
+      let tot = 0, all = 0, src = 0;
+      for (let i = 0; i < n; i++) {
+        const y = Math.max(this.Y[i + j * n], 0);
+        if (!y) continue;
+        tot += y; all += pr.dp[i] * y;
+        if (pr.inSource[i]) src += pr.dp[i] * y;
+      }
+      const buyer = this.countryCodes[Math.floor(j / this.nk)], code = this.catCodes[j % this.nk];
+      return { buyer, buyer_name: this.countryNames[buyer], code, category: this.catLabels[code], final_demand: tot,
+               dp: all / tot, dp_source: src / tot, dp_other: (all - src) / tot };
+    });
+  }
 }
 
 // ---- Helpers -------------------------------------------------------------------------------------------

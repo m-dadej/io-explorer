@@ -28,6 +28,10 @@
 #   domestic_content()     where EUR 1 of a country's own final demand ends up (home, abroad, taxes)
 #   domestic_multipliers() home GVA and output per EUR 1 of final demand for each home industry
 #   home_demand_exposure() share of each home industry's GVA depending on each kind of home demand
+#   price_shock()          price changes everywhere after the output price of some country-sectors
+#                          rises (cost push, passed on along the supply chain)
+#   summarise_price()      a price shock by country, industry, country-sector, ...
+#   basket_prices()        price change of what households, government, investors buy, by country
 #
 # Shocks and the domestic functions take induced = TRUE to add household spending of the extra
 # wages, round after round (a "Type II" effect; spend rate in config.R).
@@ -37,6 +41,8 @@
 #   value added that final demand y generates:      v * (L y)
 #   value added that depends on production of S:    v_R * L[R,S] L[S,S]^-1 x_S
 #   (output of S set from outside; R = all other country-sectors)
+#   prices (the dual model): p = p A + v; a price change of S set from outside moves the rest by
+#   dp_R = dp_S L[S,S]^-1 L[S,R]
 # =============================================================================
 
 library(data.table)
@@ -668,6 +674,109 @@ home_demand_exposure <- function(year = default_year, country, level = c("sector
   }, parts, c(names(fd_categories), "FOREIGN"), c(unname(fd_categories), "Foreign final demand")))
   out[, `:=`(year = year, share = va_dependent / va,
              origin_name = if (level == "sector") sector_names[origin] else origin)]
+  out[]
+}
+
+# ---- 7. Price shocks (cost push) --------------------------------------------------------------------
+# The price model, the dual of the quantity model above: the price of each country-sector's output
+# is the cost of its inputs plus its GVA per EUR of output, p = p A + v (all prices are 1 in the
+# table's year). The output price of the source country-sectors S rises by pct %, set from outside
+# the model (e.g. a world oil price). Every buyer passes its extra input costs on in full, along the
+# whole supply chain, at home and abroad. GVA per EUR of output stays as it is everywhere else (no
+# change in wages or margins per unit), volumes stay as they are, and nobody switches inputs.
+#   dp_R = dp_S L[S,S]^-1 L[S,R]  (= dp_S A[S,R] (I - A[R,R])^-1), R = all other country-sectors
+# Prices are basic prices: before VAT, excise and other taxes on products.
+#
+# Returns one row per country-sector (shares: 0.01 = +1%):
+#   dp           price change of its output. Outside S: its extra input cost per EUR of output.
+#                In S: the shock itself
+#   dp_direct    extra cost of what it buys directly from S, per EUR of output: the cost push if
+#                nobody else passed anything on (the lower end; dp is the upper end)
+#   dp_indirect  extra cost per EUR of output that comes through other suppliers (with dp_direct it
+#                adds up to the extra input cost per EUR; outside S that is dp)
+#   cost, cost_direct  the same in EUR m at today's volumes (per EUR x output)
+#   cost_share_va      cost / GVA: the squeeze on the margin if the industry cannot pass it on
+#   x            output; zero or negative output counts as no output
+#   in_source    whether it is one of the producers whose price is set
+price_shock <- function(year = default_year, source_countries, source_sectors = "All sectors", pct = 10) {
+  if (!is.numeric(pct) || length(pct) != 1 || is.na(pct) || pct == 0) stop("Give a price change other than 0")
+  core <- load_core(year)
+  A    <- load_A(year)
+  S <- select_cs(source_countries, source_sectors)
+  S <- S[core$x[S] > 0]
+  if (!length(S)) stop("The source has no output")
+  R  <- setdiff(seq_len(n), S)
+  dS <- rep(pct / 100, length(S))
+  dp <- numeric(n)
+  dp[S] <- dS
+  if (length(R)) {
+    if (length(S) <= length(R)) {
+      L <- load_L(year)
+      dp[R] <- as.vector(crossprod(L[S, R, drop = FALSE], solve(t(L[S, S, drop = FALSE]), dS)))
+    } else {   # large S: solving for the (smaller) rest is faster
+      dp[R] <- solve(t(diag(length(R)) - A[R, R, drop = FALSE]), as.vector(crossprod(A[S, R, drop = FALSE], dS)))
+    }
+  }
+  unit_cost <- as.vector(crossprod(A, dp))                       # extra input cost per EUR of output
+  direct    <- as.vector(crossprod(A[S, , drop = FALSE], dS))    # of which: bought directly from S
+  x <- pmax(core$x, 0)
+  out <- copy(cs)
+  out[, `:=`(year = year, x = x, va = core$va, dp = dp, dp_direct = direct, dp_indirect = unit_cost - direct,
+             cost = unit_cost * x, cost_direct = direct * x, in_source = i %in% S)]
+  out[, cost_share_va := cost / va]
+  setattr(out, "shock", list(what = "price", size = pct, year = year, n_source = length(S),
+                             source_output = sum(x[S])))
+  out[]
+}
+
+# Totals of a price shock. level as in summarise_impact(); `countries` keeps only these. The producers
+# whose price is set are left out (their price is the shock itself). Prices are averaged with output
+# weights, i.e. the price index of what the rows produce:
+#   dp, dp_direct, dp_indirect  price change (0.01 = +1%) and its two parts
+#   cost, cost_direct           extra input cost, EUR m at today's volumes
+#   cost_share_va               cost / GVA
+# min_va leaves out rows with less GVA (EUR m), except at country and total level.
+summarise_price <- function(price, level = c("country", "country_sector", "sector", "sector_group",
+                                             "country_sector_group", "total"),
+                            countries = "World", min_va = 0) {
+  level <- match.arg(level)
+  dt <- price[country %in% expand_countries(countries) & in_source == FALSE]
+  by <- switch(level,
+    country              = "country",
+    country_sector       = c("country", "sector"),
+    sector               = "sector",
+    sector_group         = "sector_group",
+    country_sector_group = c("country", "sector_group"),
+    total                = character(0)
+  )
+  out <- dt[, .(x = sum(x), va = sum(va), cost = sum(cost), cost_direct = sum(cost_direct)), by = by]
+  out[, `:=`(dp = ifelse(x > 0, cost / x, NA_real_), dp_direct = ifelse(x > 0, cost_direct / x, NA_real_))]
+  out[, `:=`(dp_indirect = dp - dp_direct, cost_share_va = cost / va)]
+  if ("country" %in% by) out[, country_name := country_names[country]]
+  if ("sector" %in% by) out[, sector_name := sector_names[sector]]
+  if (level == "country_sector") out[, label := paste(short_code(country), sector_name)]
+  if (!level %in% c("country", "total")) out <- out[va >= min_va]
+  out[order(-dp)][]
+}
+
+# Price change of what final buyers buy, by buyer country and final demand category, at basic prices:
+# the price changes weighted by the basket of each buyer country (home-made and imported products).
+#   dp          price change of the basket (0.01 = +1%)
+#   dp_source   of which products of the producers whose price is set, bought directly
+#   dp_other    other products, whose prices rise through their costs
+#   final_demand  the basket, EUR m (decreases of inventories left out)
+basket_prices <- function(price, buyers = "World", categories = c("P3_S14", "P3_S13", "P51G")) {
+  core <- load_core(attr(price, "shock")$year)
+  cols <- select_fd(buyers, categories)
+  Yp   <- pmax(core$Y[, cols, drop = FALSE], 0)
+  src  <- price$in_source
+  out <- data.table(buyer = fd$buyer[cols], code = fd$code[cols], category = fd$category[cols],
+                    final_demand = colSums(Yp),
+                    dp           = colSums(price$dp * Yp),
+                    dp_source    = colSums(price$dp[src] * Yp[src, , drop = FALSE]))
+  out[, `:=`(dp = dp / final_demand, dp_source = dp_source / final_demand)]
+  out[, `:=`(dp_other = dp - dp_source, buyer_name = country_names[buyer])]
+  setcolorder(out, c("buyer", "buyer_name"))
   out[]
 }
 

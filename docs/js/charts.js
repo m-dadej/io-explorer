@@ -17,6 +17,9 @@ export const contentColours = [['Home GVA', blue], ['GVA abroad', '#eb6834'], ['
 export const multiplierColours = [['The industry itself', '#184f95'], ['Other home industries', '#7fb3ee'],
   ['GVA abroad', '#eb6834'], ['Taxes on products & other', rest]];
 export const hhLabel = 'From household spending';
+// Parts of a price shock's cost push, and the two price measures by country (grey, blue)
+export const priceColours = [['Direct purchases', '#1a4f9c'], ['Through other suppliers', '#7fb3ee']];
+export const priceMeasures = ['Output prices', 'Household basket'];
 
 const ctx = document.createElement('canvas').getContext('2d');
 ctx.font = '12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';

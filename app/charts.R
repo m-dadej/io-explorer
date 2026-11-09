@@ -26,6 +26,11 @@ hh_green <- "#1baf7a"
 # Parts of a shock's effect: supply-chain rounds in blues (darker = closer to the shock)
 effect_colours <- c("Direct" = "#1a4f9c", "First-round suppliers" = "#3a80d8",
                     "Further supply-chain rounds" = "#7fb3ee", "Household spending" = hh_green)
+# Parts of a price shock's cost push: bought directly from the producers whose price rises, or
+# passed on by other suppliers
+price_colours <- c("Direct purchases" = "#1a4f9c", "Through other suppliers" = "#7fb3ee")
+# Prices by country: output prices (grey) next to the household basket (blue)
+price_measures <- c("Output prices", "Household basket")
 
 # Colours for up to 8 lines, always in this order
 series_colours <- c("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")

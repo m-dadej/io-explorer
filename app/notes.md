@@ -37,7 +37,7 @@ Example: Polish construction output +EUR 30m creates EUR 15.8m of Polish GVA:
 - first-round suppliers: 3.7. Wholesale trade alone gets 0.55, from the merchants' margins on the materials construction buys;
 - further rounds: 2.3.
 
-The model is linear: no price effects and no substitution. Input structures are fixed at the chosen year. By default there are no income effects through household spending: it is an "open" model, so the effects are a lower bound for demand shocks. The option *Add household spending of extra wages* adds them (see below).
+The model is linear: these shocks have no price effects and no substitution (the Price shock tab is the price side of the same model, see below). Input structures are fixed at the chosen year. By default there are no income effects through household spending: it is an "open" model, so the effects are a lower bound for demand shocks. The option *Add household spending of extra wages* adds them (see below).
 
 ### Domestic shock (tab 6)
 A shock inside one country, seen from that country: what happens to its own industries and how much leaks abroad.
@@ -104,7 +104,34 @@ In a production shock, household spending changes demand for all industries, the
 
 The structural view of which demand each home industry depends on splits the GVA that exists today, so it is always shown without household spending.
 
-### Government consumption (tab 7)
+### Price shock (tab 7)
+The same tables, read the other way round. The price of each country-industry's output is the cost of its inputs plus its GVA per euro of output: p = p·A + v, with all prices equal to 1 in the table's year. The output price of the chosen producers S rises by a % set from outside the model, for instance by a world oil price. Every buyer passes its extra input costs on in full, along the whole supply chain, at home and abroad. The price of every other country-industry R moves by
+
+dp<sub>R</sub> = dp<sub>S</sub> · L<sub>SS</sub>⁻¹ · L<sub>SR</sub> = dp<sub>S</sub> · A<sub>SR</sub> · (I − A<sub>RR</sub>)⁻¹
+
+For a single producer j this is dp<sub>i</sub> = shock × L[j,i] / L[j,j]. The price shock uses row j of the Leontief inverse; the production shock uses column j. A price rise flows down the supply chain to the buyers, and a production cut flows up it to the suppliers.
+
+- **Price change** of an industry's output = its extra input cost per EUR of output. It has two parts:
+  - **Direct purchases:** the extra cost of what it buys from the producers themselves, shock × A[S,i]. This is the cost push if no one else passed anything on: the lower end.
+  - **Through other suppliers:** what its other suppliers pass on. Together with the direct part this is full pass-through: the upper end.
+- **Extra cost** = price change × output, in EUR at today's volumes. As % of GVA it is the squeeze on the industry's margins if it cannot raise its own price.
+- **Totals** for a country, an industry or a group are output-weighted, i.e. the price index of what they produce. The producers whose price is set are left out of all totals and charts, since their price is the shock itself.
+- **Baskets:** the price change of what a country's households, government or investors buy, home-made and imported, weighted by their purchases. The producers' own products bought directly (e.g. fuel bought by households) count with the full rise.
+
+Example: refined petroleum products (C19) +10% in every country, Polish industries, 2024:
+- land transport +1.70%, of which 1.39 pp from its own fuel; air transport +1.16%; chemicals +0.89%;
+- travel agencies +0.84%, almost all of it through their suppliers (land and air transport, other travel agencies): an extra cost of 14% of their thin GVA;
+- all Polish industries: an extra cost of EUR 6.7 bn, 0.9% of their GVA;
+- the Polish household basket +0.64%, of which 0.33 pp is fuel bought directly. If only Polish refineries raise prices, imports keep their old price and the basket rises 0.46%.
+
+**What it assumes:**
+- Full pass-through and no substitution: no one absorbs the cost in margins or switches inputs, and volumes do not react. Read the total as the upper end of a short-run cost push, and the direct part as the lower end.
+- GVA per unit stays as it is: wages and profits per unit do not react (no wage-price second round).
+- Basic prices: before VAT, excise and other taxes on products. Excise is an amount per litre, so a given % rise at the pump is a larger % rise in basic prices. The household basket is therefore not the CPI: it leaves out taxes on products, and trade margins count as purchases from the trade industries.
+- It is separate from the quantity shocks: here a higher price does not lower demand.
+- For goods priced on world markets (oil products, gas, metals), choose World as the producers' countries. A rise in one country only leaves imported products at their old price.
+
+### Government consumption (tab 8)
 Government final consumption (ESA code P3_S13) is mostly public services produced by the country itself (administration, education, health), plus goods and services provided to households (e.g. medicines). **Military equipment is investment (GFCF, P51G), not government consumption.** FIGARO does not show investment by the institution that buys it. For defence procurement scenarios, use the simulator with "Investment (GFCF)" and the defence-related industries (see config.R).
 
 ## Good to know
@@ -143,6 +170,11 @@ domestic_multipliers(2024, "PL")
 home_vs_abroad(domestic_shock(2024, "PL", categories = "Government", eur_m = 1000, induced = TRUE), "PL")
 domestic_multipliers(2024, "PL", induced = TRUE, spend_rate = 0.6)
 fd_shock(2024, buyers = "DE", categories = "Government", eur_m = 10000, induced = TRUE)
+
+# Refined petroleum prices +10% everywhere: Polish industries' prices and costs, and the baskets
+p <- price_shock(2024, "World", "C19", pct = 10)
+summarise_price(p, "sector", "PL", min_va = 100)
+basket_prices(p, "PL")
 ```
 
 See `analysis/examples.R` for more, and the long tables in `data/tables/` (parquet) for your own analysis.
