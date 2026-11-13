@@ -8,7 +8,7 @@
 import { IOModel, parseCore, parseL, parseA, sum } from './engine.js';
 import { el, fmt, buildControls, valueBoxes, card, message, downloadXlsx, debounce } from './ui.js';
 import { barsH, stackedH, pairedH, heatmap, categoryColours, effectColours, contentColours, multiplierColours,
-         hhGreen, hhLabel, blue, priceColours, priceMeasures, exportColours, channelColours, costColours,
+         hhGreen, hhLabel, priceColours, priceMeasures, exportColours, channelColours, costColours,
          buyerColours, homeColours } from './charts.js';
 
 let model, meta, D, year, base;
@@ -596,73 +596,6 @@ function buildPairs() {
   return { update };
 }
 
-// ==== Government consumption =========================================================================================
-let simRequest = null;   // a scenario sent from the Government tab to the shock simulator
-function buildGov() {
-  const { side, content } = page('gov');
-  const ctl = buildControls(side, [
-    { key: 'show', type: 'multi', label: 'Countries', value: [D.focus], options: countryOpts },
-    { type: 'hr' },
-    { key: 'gov', type: 'select', label: 'Government of', value: 'DE', choices: meta.countries.map(c => [c.code, c.name]) },
-    { key: 'level', type: 'radio', label: 'Who benefits, by', value: 'country_sector',
-      choices: [['country_sector', 'Country-industry'], ['country', 'Country'], ['sector', 'Industry']] },
-    { key: 'metric', type: 'radio', label: 'Rank by', value: 'share', inline: true, choices: [['share', '% of own GVA'], ['eur', 'EUR million']] },
-    { key: 'min_va', type: 'number', label: 'Leave out country-industries with GVA below (EUR m)', value: D.min_va, min: 0, step: 50 },
-    { key: 'top', type: 'number', label: 'Rows in the chart', value: D.top_n, min: 5, max: 60, step: 5 },
-    { type: 'hr' },
-    { key: 'amount', type: 'number', label: 'Scenario: change in this government’s consumption (EUR m)', value: 10000, step: 1000 },
-    { type: 'button', label: 'Run in the shock simulator', onClick: () => {
-      simRequest = { gov: S.gov, amount: S.amount, show: [...S.show] };
-      location.hash = 'sim';
-    } },
-    { type: 'hint', html: 'Government consumption (P3_S13) covers public services (health, education, administration, defence services) and goods provided to households. Military equipment is investment (GFCF), not consumption: for defence procurement use the simulator with “Investment (GFCF)” and the defence-related industries.' }
-  ], () => update());
-  const S = ctl.state;
-  const govColours = [['Home government', blue], ['Foreign governments', '#eb6834']];
-  const cShare = card(content, { title: 'Share of GVA that depends on government consumption',
-    note: 'Home = the country’s own government. Foreign = all other governments.' });
-  const cBenef = card(content, { title: 'Who benefits from the consumption of a government' });
-  const update = debounce(async () => {
-    try {
-      needSel(S.show);
-      const sh = model.demandShares(S.show).sort((a, b) => (b.share_domestic + b.share_foreign) - (a.share_domestic + a.share_foreign));
-      cShare.set({
-        chart: w => stackedH(w, { rows: sh.flatMap(r => [{ label: r.country_name, category: 'Home government', value: r.share_domestic },
-                                                        { label: r.country_name, category: 'Foreign governments', value: r.share_foreign }]),
-                                  labels: sh.map(r => r.country_name), colours: govColours, xTitle: 'Share of the country’s GVA', caption: `${year}.` }),
-        data: sh, file: 'government_share',
-        columns: [COLS.country, { key: 'share_domestic', label: 'Home government', type: 'pct' }, { key: 'share_foreign', label: 'Foreign governments', type: 'pct' },
-                  { key: 'va_domestic', label: 'Home, EUR m', type: 'eur' }, { key: 'va_foreign', label: 'Foreign, EUR m', type: 'eur' }, COLS.va]
-      });
-    } catch (e) { cShare.message(e.message, true); }
-    try {
-      const govName = model.countryNames[S.gov];
-      cBenef.setTitle(`Who benefits from the consumption of the government of ${govName} (outside ${S.gov})`);
-      needSel(S.show);
-      const show = model.expandCountries(S.show).filter(c => c !== S.gov);
-      if (!show.length) throw new Error('Choose countries other than the government’s own.');
-      if (!model.L) cBenef.message('Loading the model data…');
-      await ensure('L');
-      const imp = model.fdShock({ buyers: [S.gov], categories: ['P3_S13'], pct: 100, decompose: false });
-      const share = S.metric === 'share';
-      const s = model.summariseImpact(imp, S.level, show, minVaOf(S.min_va))
-        .map(r => ({ ...r, name: { country: r.country_name, country_sector: r.label, sector: r.sector_name }[S.level] }))
-        .sort((a, b) => share ? b.share_va - a.share_va : b.dva - a.dva);
-      const top = s.slice(0, topOf(S.top, D.top_n));
-      cBenef.set({
-        chart: w => barsH(w, { rows: top, label: d => d.name, value: d => share ? d.share_va : d.dva, percent: share,
-                               xTitle: share ? 'Share of own GVA' : 'GVA from this government, EUR m',
-                               caption: `${year}. Countries shown: ${model.describe(S.show)}${S.show.includes(S.gov) ? `, without ${S.gov}` : ''}.`,
-                               tip: d => `${d.name}\n${fmt.pct(d.share_va, 3)} of its GVA\n${fmt.m(d.dva, 1)}` }),
-        data: s, file: 'government_beneficiaries',
-        columns: [{ key: 'name', label: 'Who', type: 'text' }, { key: 'share_va', label: 'Share of own GVA', type: 'pct' },
-                  { key: 'dva', label: 'GVA from this government, EUR m', type: 'eur1' }, COLS.va]
-      });
-    } catch (e) { cBenef.message(e.message, true); }
-  }, 150);
-  return { update };
-}
-
 // ==== 5. Shock simulator ===========================================================================================
 function buildSim() {
   const { side, content } = page('sim');
@@ -809,18 +742,7 @@ function buildSim() {
                         { name: 'by_country_industry', rows: cs, cols: csCols },
                         { name: 'by_group_shown', rows: g, cols: gCols }], 'shock_results.xlsx');
   }
-  // A scenario from the Government tab: set the controls and run it
-  function takeRequest(r) {
-    ctl.set.type('final_demand'); ctl.set.buyers([r.gov]); ctl.set.cats(['P3_S13']); ctl.set.pc(['World']);
-    ctl.set.ps(['All sectors']); ctl.set.unit('eur'); ctl.set.size(r.amount); ctl.set.show(r.show);
-    ctl.refresh();
-  }
-  return {
-    update: () => {
-      if (simRequest) { takeRequest(simRequest); simRequest = null; run(); }
-      else if (!ran) run();
-    }
-  };
+  return { update: () => { if (!ran) run(); } };
 }
 
 // ==== Trade shock: a change in what exporters sell to importers ===================================================
@@ -1321,7 +1243,6 @@ const TABS = [
   { id: 'trade', title: 'Trade shock', build: buildTrade },
   { id: 'dom', title: 'Domestic shock', build: buildDom },
   { id: 'price', title: 'Price shock', build: buildPrice },
-  { id: 'gov', title: 'Government', build: buildGov },
   { id: 'notes', title: 'Notes', build: buildNotes }
 ];
 const built = {};

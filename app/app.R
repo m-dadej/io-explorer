@@ -645,38 +645,6 @@ ui <- page_navbar(
     )
   ),
 
-  # ---- 8. Government consumption ---------------------------------------------------------------------------------
-  nav_panel("Government", value = "gov",
-    layout_sidebar(fillable = FALSE, border = FALSE,
-      sidebar = sidebar(width = 310,
-        pick_year("g_year"),
-        pick_countries("g_show", "Countries", default_focus),
-        hr(),
-        selectInput("g_gov", "Government of", choices = setNames(countries$code, countries$name),
-                    selected = "DE"),
-        radioButtons("g_level", "Who benefits, by",
-                     c("Country-industry" = "country_sector", "Country" = "country", "Industry" = "sector")),
-        radioButtons("g_metric", "Rank by", c("% of own GVA" = "share", "EUR million" = "eur"), inline = TRUE),
-        pick_min_va("g_min_va"),
-        pick_top("g_top"),
-        hr(),
-        numericInput("g_amount", "Scenario: change in this government's consumption (EUR m)", 10000, step = 1000),
-        actionButton("g_sim", "Run in the shock simulator", class = "btn-outline-primary w-100"),
-        hint(class = "mt-2", "Government consumption (P3_S13) covers public services (health, education, ",
-             "administration, defence services) and goods provided to households. Military equipment is ",
-             "investment (GFCF), not consumption: for defence procurement use the simulator with ",
-             "\"Investment (GFCF)\" and the defence-related industries.")
-      ),
-      chart_card("g_share", "Share of GVA that depends on government consumption",
-                 note = "Home = the country's own government. Foreign = all other governments."),
-      chart_card("g_time", "Over time",
-                 radioButtons("g_time_measure", NULL,
-                              c("Foreign governments" = "foreign", "Home government" = "home", "Both" = "both"),
-                              inline = TRUE)),
-      chart_card("g_benef", textOutput("g_benef_title", inline = TRUE))
-    )
-  ),
-
   # ---- 9. Notes ----------------------------------------------------------------------------------------------------
   nav_panel("Notes", value = "notes",
     div(class = "container", style = "max-width: 860px", markdown(paste(readLines(file.path(root_dir, "app/notes.md"), encoding = "UTF-8"), collapse = "
@@ -1425,90 +1393,6 @@ server <- function(input, output, session) {
       ), file)
     }
   )
-
-  # ---- 8. Government --------------------------------------------------------------------------------------------------
-  g_shares <- reactive({
-    need_sel(input$g_show)
-    demand_shares(as.integer(input$g_year), input$g_show, "P3_S13")[order(-(share_domestic + share_foreign))]
-  })
-  gov_colours <- c("Home government" = blue, "Foreign governments" = "#eb6834")
-  wire_card(output, "g_share", g_shares,
-    cols = list(country_name = c("Country", "text"), share_domestic = c("Home government", "pct"),
-                share_foreign = c("Foreign governments", "pct"), va_domestic = c("Home, EUR m", "eur"),
-                va_foreign = c("Foreign, EUR m", "eur"), va = c("GVA, EUR m", "eur")),
-    plot = function() {
-      g <- g_shares()
-      d <- rbind(data.frame(label = g$country_name, category = "Home government", value = g$share_domestic),
-                 data.frame(label = g$country_name, category = "Foreign governments", value = g$share_foreign))
-      stacked_h(d, x_title = "Share of the country's GVA", colours = gov_colours,
-                caption = paste0(input$g_year, "."))
-    },
-    height = function() bar_height(nrow(g_shares())),
-    file_stub = "government_share"
-  )
-
-  g_time <- reactive({
-    need_sel(input$g_show)
-    d <- demand_shares(yrs, input$g_show, "P3_S13")
-    d[, value := switch(input$g_time_measure, foreign = share_foreign, home = share_domestic,
-                        both = share_foreign + share_domestic)]
-    d[, panel := factor(country_name, levels = g_shares()$country_name)]
-    d
-  })
-  g_time_wide <- reactive(dcast(g_time(), country_name ~ year, value.var = "value"))
-  wire_card(output, "g_time", g_time_wide,
-    cols = c(list(country_name = c("Country", "text")),
-             setNames(lapply(as.character(yrs), function(y) c(y, "pct")), as.character(yrs))),
-    plot = function() {
-      lbl <- c(foreign = "foreign governments", home = "home government", both = "all governments")[[input$g_time_measure]]
-      small_multiples(as.data.frame(g_time()), y_title = paste("Share of GVA, depends on", lbl))
-    },
-    height = function() 170 * ceiling(length(unique(g_time()$country)) / 4) + 60,
-    file_stub = "government_share_over_time"
-  )
-
-  output$g_benef_title <- renderText(paste0("Who benefits from the consumption of the government of ",
-                                            country_names[[input$g_gov]], " (outside ", input$g_gov, ")"))
-  g_benef <- reactive({
-    show <- setdiff(expand_countries(input$g_show), input$g_gov)
-    validate(need(length(show) > 0, "Choose countries other than the government's own."))
-    imp <- va_from_final_demand(as.integer(input$g_year), buyers = input$g_gov, categories = "P3_S13")
-    s <- summarise_impact(imp, input$g_level, show, num_or(input$g_min_va, 0))
-    s[, name := switch(input$g_level, country = country_name, country_sector = label, sector = sector_name)]
-    if (input$g_metric == "share") s[order(-share_va)] else s[order(-dva)]
-  })
-  wire_card(output, "g_benef", g_benef,
-    cols = list(name = c("Who", "text"), share_va = c("Share of own GVA", "pct"),
-                dva = c("GVA from this government, EUR m", "eur1"), va = c("GVA, EUR m", "eur")),
-    plot = function() {
-      d <- head(g_benef(), num_or(input$g_top, top_n))
-      if (input$g_metric == "share") {
-        bars_h(d$name, d$share_va, x_title = "Share of own GVA")
-      } else {
-        bars_h(d$name, d$dva, x_title = "GVA from this government, EUR m", percent = FALSE)
-      }
-    },
-    height = function() bar_height(min(nrow(g_benef()), num_or(input$g_top, top_n))),
-    file_stub = "government_beneficiaries"
-  )
-
-  # Send the scenario to the simulator and run it there
-  observeEvent(input$g_sim, {
-    updateRadioButtons(session, "s_type", selected = "final_demand")
-    updateSelectizeInput(session, "s_buyers", selected = input$g_gov)
-    updateCheckboxGroupInput(session, "s_cats", selected = "P3_S13")
-    updateSelectizeInput(session, "s_pc", selected = "World")
-    updateSelectizeInput(session, "s_ps", selected = "All sectors")
-    updateRadioButtons(session, "s_unit", selected = "eur")
-    updateNumericInput(session, "s_size", value = input$g_amount)
-    updateSelectInput(session, "s_year", selected = input$g_year)
-    updateSelectizeInput(session, "s_show", selected = input$g_show)
-    shock_spec(list(type = "final_demand", buyers = input$g_gov, cats = "P3_S13", pc = "World",
-                    ps = "All sectors", src_c = NULL, src_s = NULL, unit = "eur",
-                    size = input$g_amount, year = as.integer(input$g_year),
-                    induced = isTRUE(input$s_induced), rate = input$s_rate))   # keeps the simulator's setting
-    nav_select("tabs", "sim")
-  })
 
   # An engine error becomes a message in the card
   or_message <- function(expr) tryCatch(expr, error = function(e) validate(need(FALSE, conditionMessage(e))))

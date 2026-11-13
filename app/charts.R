@@ -151,18 +151,6 @@ lines_t <- function(d, levels = unique(d$series), y_title = NULL, percent = TRUE
     guides(colour = guide_legend(nrow = 2, byrow = TRUE))
 }
 
-# One small chart per panel (e.g. per country), one blue line each, same y scale.
-small_multiples <- function(d, y_title = NULL, caption = NULL, ncol = 4) {
-  ggplot(d, aes(year, value)) +
-    geom_line(linewidth = 0.8, colour = blue) +
-    geom_point(size = 1.3, colour = blue) +
-    facet_wrap(~panel, ncol = ncol) +
-    scale_x_continuous(breaks = scales::breaks_pretty(4)) +
-    scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0, 0.08))) +
-    labs(x = NULL, y = y_title, caption = caption) +
-    theme_io
-}
-
 # Heatmap: a coloured table. `d` has row, col, value (shares 0-1, may be negative for shocks:
 # colour shows the size of the number, the label shows its sign). Columns in `plain_cols` show
 # their numbers without colour (e.g. "Home", which would otherwise wash out the rest).

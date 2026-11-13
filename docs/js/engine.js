@@ -456,25 +456,6 @@ export class IOModel {
     }));
   }
 
-  // Share of each country's GVA that depends on final demand categories (default: government consumption),
-  // at home and abroad (like demand_shares() in R)
-  demandShares(countries, categories = ['P3_S13']) {
-    const { n, nk } = this, cats = new Set(this.expandCategories(categories).map(k => this.catCodes.indexOf(k)));
-    return this.expandCountries(countries).map(cc => {
-      const c = this.countryIndex.get(cc);
-      let dom = 0, frn = 0, va = 0;
-      for (const i of this.homeRows(cc)) {
-        va += this.va[i];
-        for (let j = 0; j < this.nfd; j++) {
-          if (!cats.has(j % nk)) continue;
-          if (Math.floor(j / nk) === c) dom += this.VAD[i + j * n]; else frn += this.VAD[i + j * n];
-        }
-      }
-      return { country: cc, country_name: this.countryNames[cc], va, va_domestic: dom, va_foreign: frn,
-               share_domestic: dom / va, share_foreign: frn / va };
-    });
-  }
-
   // ---- 5. The home economy --------------------------------------------------------------------------------
   domesticShock({ country, type = 'final_demand', categories = ['All'], sectors = ['All sectors'], productsFrom = 'all',
                   pct = null, eur = null, induced = false, spendRate = this.meta.defaults.spend_rate, decompose = true }) {

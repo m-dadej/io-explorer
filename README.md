@@ -67,7 +67,6 @@ Every package it uses is common: data.table, arrow, shiny, bslib, reactable, ggp
 | Trade shock | A change in what exporters sell to importers (e.g. EU exports to the US −10%), all exports or only final products or only inputs, with no one, the importer's own producers or producers elsewhere making up for it. Results by country, country-industry and industry group, split into the change through the country's own sales and through other countries' sales it supplies; Excel download |
 | Domestic shock | A shock to a country's own final demand or production. You see the effect on its own industries, the leakage abroad by country, and home GVA per EUR of shock. Three structural views need no shock: (1) which kind of home demand each industry depends on, (2) where EUR 1 of home demand ends up, by category and over time, and (3) home multipliers by industry |
 | Price shock | A rise in the output price of some producers (e.g. oil products in every country), passed on in full along the supply chain. You see the price change of every industry, split into its own direct purchases and what other suppliers pass on, the extra cost in EUR and as % of GVA, output prices and the household, government and investment baskets by country, and a heatmap by industry group; Excel download |
-| Government | GVA depending on government consumption at home and abroad, who benefits from a given government, a one-click scenario |
 | Notes | Definitions, formulas, caveats |
 
 Every chart has a Table tab with the numbers and an Excel download.

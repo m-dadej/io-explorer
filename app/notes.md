@@ -173,11 +173,9 @@ Example: refined petroleum products (C19) +10% in every country, Polish industri
 - It is separate from the quantity shocks: here a higher price does not lower demand.
 - For goods priced on world markets (oil products, gas, metals), choose World as the producers' countries. A rise in one country only leaves imported products at their old price.
 
-### Government consumption
-Government final consumption (ESA code P3_S13) is mostly public services produced by the country itself (administration, education, health), plus goods and services provided to households (e.g. medicines). **Military equipment is investment (GFCF, P51G), not government consumption.** FIGARO does not show investment by the institution that buys it. For defence procurement scenarios, use the simulator with "Investment (GFCF)" and the defence-related industries (see config.R).
-
 ## Good to know
 
+- **Government consumption** (ESA code P3_S13) is mostly public services produced by the country itself (administration, education, health), plus goods and services provided to households (e.g. medicines). **Military equipment is investment (GFCF, P51G), not government consumption.** FIGARO does not show investment by the institution that buys it. For defence procurement scenarios, use the simulator with "Investment (GFCF)" and the defence-related industries (see config.R).
 - **Small country-industries** can show extreme shares, even above 100% when their final demand is negative (stock drawdowns larger than their output). Rankings of shares leave out country-industries with GVA below the threshold in the sidebar (default from `config.R`).
 - **Rest of world (FIGW1)** is one block for all countries not covered separately.
 - **Current prices:** changes over time mix volumes, prices and exchange rates.
